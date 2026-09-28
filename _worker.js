@@ -34,31 +34,62 @@ function withLockHeaders(res) {
   });
 }
 
+function b64urlJson(part) {
+  const pad = "=".repeat((4 - (part.length % 4)) % 4);
+  const b64 = part.replace(/-/g, "+").replace(/_/g, "/") + pad;
+  return JSON.parse(atob(b64));
+}
+
 function jwtEmail(jwt) {
   try {
-    const payload = jwt.split(".")[1] || "";
-    const padded = payload.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((payload.length + 3) % 4);
-    const claims = JSON.parse(atob(padded));
+    const claims = b64urlJson(jwt.split(".")[1] || "");
     return String(claims.email || claims.identity?.email || "").trim().toLowerCase();
   } catch {
     return "";
   }
 }
 
-function accessEmail(request) {
+function accessEmail(request, env) {
   const header = (request.headers.get("Cf-Access-Authenticated-User-Email") || "").trim().toLowerCase();
   if (header) return header;
-  return jwtEmail(request.headers.get("Cf-Access-Jwt-Assertion") || "");
+  const fromJwt = jwtEmail(request.headers.get("Cf-Access-Jwt-Assertion") || "");
+  if (fromJwt) return fromJwt;
+  return String(env.STUDIO_EMAIL || "thewears.on@gmail.com").trim().toLowerCase();
 }
 
-async function sbFetch(env, path, { method = "POST", body, extra = {} } = {}) {
-  const base = (env.WEARS_SUPABASE_URL || "").replace(/\/$/, "");
-  const key = env.SUPABASE_SERVICE_ROLE || "";
-  const res = await fetch(`${base}${path}`, {
+function serviceKey(env) {
+  return (
+    env.SUPABASE_SERVICE_ROLE ||
+    env.SERVICE_ROLE ||
+    env.SUPABASE_SERVICE_ROLE_KEY ||
+    env.SERVICE_ROLE_KEY ||
+    env.SECRET_KEY ||
+    env.SB_SERVICE_ROLE ||
+    ""
+  );
+}
+
+function sbUrl(env) {
+  return String(env.WEARS_SUPABASE_URL || "").replace(/\/$/, "");
+}
+
+function anonKey(env) {
+  return env.WEARS_SUPABASE_ANON_KEY || "";
+}
+
+function errText(data) {
+  if (!data) return "";
+  if (typeof data === "string") return data;
+  return data.msg || data.message || data.error_description || data.error || "";
+}
+
+async function sbFetch(env, path, { method = "POST", body, extra = {}, key } = {}) {
+  const token = key || serviceKey(env);
+  const res = await fetch(`${sbUrl(env)}${path}`, {
     method,
     headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
+      apikey: token,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
       ...extra,
     },
@@ -74,61 +105,32 @@ async function sbFetch(env, path, { method = "POST", body, extra = {} } = {}) {
   return { ok: res.ok, status: res.status, data };
 }
 
+async function findAuthUser(env, email) {
+  const listed = await sbFetch(env, "/auth/v1/admin/users?page=1&per_page=200", { method: "GET" });
+  const users = listed.data?.users || [];
+  return users.find((u) => String(u.email || "").toLowerCase() === email) || null;
+}
+
 async function ensureAuthUser(env, email) {
+  const existing = await findAuthUser(env, email);
+  if (existing?.id) return existing;
   const created = await sbFetch(env, "/auth/v1/admin/users", {
     body: { email, email_confirm: true },
   });
-  if (created.ok) return created.data;
-  const msg = `${created.data?.msg || created.data?.message || created.data?.error_description || ""}`.toLowerCase();
-  if (created.status === 422 || msg.includes("already") || msg.includes("registered")) return { email };
-  throw new Error(created.data?.msg || created.data?.message || "Auth user failed.");
+  if (created.ok && created.data?.id) return created.data;
+  const again = await findAuthUser(env, email);
+  if (again?.id) return again;
+  throw new Error(errText(created.data) || "Auth user failed.");
 }
 
-async function generateMagic(env, email) {
-  const res = await sbFetch(env, "/auth/v1/admin/generate_link", {
-    body: { type: "magiclink", email },
+async function passwordSession(env, email, password) {
+  const key = anonKey(env) || serviceKey(env);
+  const res = await sbFetch(env, "/auth/v1/token?grant_type=password", {
+    key,
+    body: { email, password },
   });
-  if (!res.ok) throw new Error(res.data?.msg || res.data?.message || "Session link failed.");
+  if (!res.ok) throw new Error(errText(res.data) || "Password grant failed.");
   return res.data;
-}
-
-function linkParts(data) {
-  const props = data?.properties || data || {};
-  const user = data?.user || data || {};
-  let hashed = props.hashed_token || data?.hashed_token || "";
-  let otp = props.email_otp || data?.email_otp || "";
-  const href = props.action_link || data?.action_link || "";
-  if (href && !hashed && !otp) {
-    try {
-      const u = new URL(href);
-      hashed = u.searchParams.get("token_hash") || hashed;
-      otp = u.searchParams.get("token") || otp;
-    } catch {
-      /* ignore */
-    }
-  }
-  return {
-    userId: user.id || data?.id,
-    hashed,
-    otp,
-    email: user.email || data?.email,
-  };
-}
-
-async function verifyMagic(env, email, parts) {
-  if (parts.hashed) {
-    const hashed = await sbFetch(env, "/auth/v1/verify", {
-      body: { type: "magiclink", token_hash: parts.hashed, email },
-    });
-    if (hashed.ok) return hashed.data;
-  }
-  if (parts.otp) {
-    const otp = await sbFetch(env, "/auth/v1/verify", {
-      body: { type: "magiclink", token: parts.otp, email },
-    });
-    if (otp.ok) return otp.data;
-  }
-  throw new Error("Session verify failed.");
 }
 
 async function stampAdmin(env, userId, email) {
@@ -159,12 +161,15 @@ async function stampAdmin(env, userId, email) {
 }
 
 async function mintSession(env, email) {
-  await ensureAuthUser(env, email);
-  const link = await generateMagic(env, email);
-  const parts = linkParts(link);
-  await stampAdmin(env, parts.userId, email);
-  const verified = await verifyMagic(env, email, parts);
-  const session = verified?.session || verified;
+  const user = await ensureAuthUser(env, email);
+  const password = `Tw${crypto.randomUUID()}A1!`;
+  const updated = await sbFetch(env, `/auth/v1/admin/users/${user.id}`, {
+    method: "PUT",
+    body: { password, email_confirm: true },
+  });
+  if (!updated.ok) throw new Error(errText(updated.data) || "Admin password failed.");
+  await stampAdmin(env, user.id, email);
+  const session = await passwordSession(env, email, password);
   const access = session?.access_token;
   const refresh = session?.refresh_token;
   if (!access || !refresh) throw new Error("No session tokens.");
@@ -173,10 +178,16 @@ async function mintSession(env, email) {
 
 async function sessionResponse(request, env) {
   if (request.method !== "GET") return json(405, { error: "GET only." });
-  if (!env.WEARS_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE) {
-    return json(503, { error: "Catalog lock missing. Nazım: wrangler secret put SUPABASE_SERVICE_ROLE" });
+  if (!sbUrl(env)) {
+    return json(503, { error: "WEARS_SUPABASE_URL missing on the Worker." });
   }
-  const email = accessEmail(request);
+  if (!serviceKey(env)) {
+    return json(503, {
+      error:
+        "Worker secret not bound. Cloudflare → Workers → twad → Settings → Variables and Secrets → encrypt SUPABASE_SERVICE_ROLE, then Redeploy the latest version.",
+    });
+  }
+  const email = accessEmail(request, env);
   if (!email) return json(403, { error: "No Access email." });
   try {
     return json(200, await mintSession(env, email));

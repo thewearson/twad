@@ -16,7 +16,7 @@
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: false,
+      detectSessionInUrl: true,
       storageKey: "twad-studio",
     },
   });
@@ -159,7 +159,7 @@
     if (error) throw error;
     if (!data || data.role !== "admin") {
       await sb.auth.signOut();
-      throw new Error("Not admin. users.role must be admin.");
+      throw new Error("Not admin. Nazım SQL: set users.role = admin for this Google email.");
     }
     return user;
   }
@@ -1016,6 +1016,18 @@
     showScreen("pick");
     await loadArtists();
   }
+
+  document.getElementById("google").addEventListener("click", async () => {
+    gateErr.textContent = "";
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}/`,
+        queryParams: { prompt: "select_account" },
+      },
+    });
+    if (error) showGate(error.message);
+  });
 
   document.getElementById("signin").addEventListener("click", async () => {
     gateErr.textContent = "";

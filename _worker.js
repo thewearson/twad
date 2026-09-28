@@ -184,8 +184,12 @@ async function sessionResponse(request, env) {
   if (!serviceKey(env)) {
     return json(503, {
       error:
-        "Worker secret not bound. Cloudflare → Workers → twad → Settings → Variables and Secrets → encrypt SUPABASE_SERVICE_ROLE, then Redeploy the latest version.",
+        "Worker secret not bound. Cloudflare → Workers → twad → Settings → Variables and Secrets → name SUPABASE_SERVICE_ROLE, encrypt the service_role key, then Redeploy.",
     });
+  }
+  const key = serviceKey(env);
+  if (key.startsWith("sb_publishable_") || key.startsWith("eyJ") && key.length < 80) {
+    return json(503, { error: "Wrong key. Use Supabase service_role / sb_secret_, not the publishable key." });
   }
   const email = accessEmail(request, env);
   if (!email) return json(403, { error: "No Access email." });
@@ -202,7 +206,7 @@ export default {
     if (!jwt) {
       return locked(403, "Forbidden");
     }
-    const path = new URL(request.url).pathname;
+    const path = new URL(request.url).pathname.replace(/\/$/, "") || "/";
     if (path === "/api/session") {
       return sessionResponse(request, env);
     }

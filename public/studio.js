@@ -163,13 +163,14 @@
 
   async function mintFromAccess() {
     const res = await fetch("/api/session", { credentials: "same-origin" });
+    const text = await res.text();
     let body = {};
     try {
-      body = await res.json();
+      body = JSON.parse(text);
     } catch {
-      body = {};
+      throw new Error(`SESSION ${res.status}. Deploy is not serving /api/session.`);
     }
-    if (!res.ok) throw new Error(body.error || "ACCESS SESSION FAILED.");
+    if (!res.ok) throw new Error(body.error || `SESSION ${res.status}`);
     const { error } = await sb.auth.setSession({
       access_token: body.access_token,
       refresh_token: body.refresh_token,

@@ -2,13 +2,17 @@
 
 Private editor for THE WEARS ON. Same Supabase as the iOS app. Not the public site.
 
-## Cloudflare Pages
+## Cloudflare
 
-- Framework preset: **None**
-- Build command: *(empty)*
-- Output directory: `/`
-- Production branch: `main`
+Git: empty build command, production branch `main`.
 
-After the first commit, **Retry deployment**.
+Access must sit on **both**:
 
-Keep this repository **private**. Put Cloudflare Access on the Pages app (preview URLs included). Admin login is email/password + `role = admin` only — no Google/Apple on this origin.
+- Production: `twad.thewears-on.workers.dev` (Domains → Production → Manage — not preview)
+- Preview: `*.twad.thewears-on.workers.dev`
+
+`_worker.js` returns 403 without `Cf-Access-Jwt-Assertion`. Edge cache is `private, no-store`.
+
+Incognito without Cloudflare login must not show STUDIO. After Access login, the placeholder is expected until the editor ships.
+
+Keep this repository **private**. Admin login later is email/password + `role = admin` — no Google/Apple on this origin.

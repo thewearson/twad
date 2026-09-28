@@ -4,6 +4,9 @@ compatibility_date = "2026-09-28"
 workers_dev = true
 preview_urls = true
 
+[vars]
+WEARS_SUPABASE_URL = "https://ctldtidtnvctxoquextm.supabase.co"
+
 [assets]
 directory = "./public"
 binding = "ASSETS"

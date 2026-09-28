@@ -16,7 +16,7 @@
     auth: {
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: true,
+      detectSessionInUrl: false,
       storageKey: "twad-studio",
     },
   });
@@ -150,18 +150,31 @@
     return (s || "x").toUpperCase().replaceAll("İ", "I").replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "x";
   }
 
-  async function requireAdmin() {
+  async function currentAdmin() {
     const { data: sessionData, error: sessionErr } = await sb.auth.getSession();
     if (sessionErr) throw sessionErr;
     const user = sessionData.session?.user;
     if (!user) return null;
     const { data, error } = await sb.from("users").select("role").eq("id", user.id).maybeSingle();
     if (error) throw error;
-    if (!data || data.role !== "admin") {
-      await sb.auth.signOut();
-      throw new Error("Not admin. Nazım SQL: set users.role = admin for this Google email.");
+    if (data?.role === "admin") return user;
+    return null;
+  }
+
+  async function mintFromAccess() {
+    const res = await fetch("/api/session", { credentials: "same-origin" });
+    let body = {};
+    try {
+      body = await res.json();
+    } catch {
+      body = {};
     }
-    return user;
+    if (!res.ok) throw new Error(body.error || "ACCESS SESSION FAILED.");
+    const { error } = await sb.auth.setSession({
+      access_token: body.access_token,
+      refresh_token: body.refresh_token,
+    });
+    if (error) throw error;
   }
 
   async function loadImageFile(file) {
@@ -1017,41 +1030,9 @@
     await loadArtists();
   }
 
-  document.getElementById("google").addEventListener("click", async () => {
-    gateErr.textContent = "";
-    const { error } = await sb.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/`,
-        queryParams: { prompt: "select_account" },
-      },
-    });
-    if (error) showGate(error.message);
-  });
-
-  document.getElementById("signin").addEventListener("click", async () => {
-    gateErr.textContent = "";
-    const email = document.getElementById("email").value.trim();
-    const password = document.getElementById("password").value;
-    const { error } = await sb.auth.signInWithPassword({ email, password });
-    if (error) {
-      showGate(error.message);
-      return;
-    }
-    try {
-      const user = await requireAdmin();
-      await bootDesk(user);
-    } catch (e) {
-      showGate(e.message || String(e));
-    }
-  });
-
   document.getElementById("signout").addEventListener("click", async () => {
     await sb.auth.signOut();
-    table = "";
-    rows = [];
-    selected = null;
-    showGate("");
+    window.location.href = "/cdn-cgi/access/logout";
   });
 
   reloadBtn.addEventListener("click", () => {
@@ -1081,17 +1062,17 @@
     addTableListingRow(insertUrlRows, null);
   });
 
-  document.getElementById("password").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") document.getElementById("signin").click();
-  });
-
   (async () => {
+    showGate("");
+    const copy = document.getElementById("gate-copy");
+    if (copy) copy.textContent = "Connecting to the archive";
     try {
-      const user = await requireAdmin();
+      let user = await currentAdmin();
       if (!user) {
-        showGate("");
-        return;
+        await mintFromAccess();
+        user = await currentAdmin();
       }
+      if (!user) throw new Error("NOT ADMIN.");
       await bootDesk(user);
     } catch (e) {
       showGate(e.message || String(e));

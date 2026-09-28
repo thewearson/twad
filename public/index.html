@@ -61,6 +61,13 @@
     #insert { margin: 16px 0; padding: 12px; border: 1px solid #111; display: none; }
     #insert.on { display: block; }
     #insert h2 { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+    #insert-urls { display: none; margin: 0 0 12px; }
+    #insert-urls.on { display: block; }
+    .listing-ed { display: flex; flex-direction: column; gap: 6px; min-width: 280px; }
+    .listing-row { display: grid; grid-template-columns: 88px 1fr 72px auto; gap: 4px; align-items: center; }
+    .listing-row input { width: 100%; }
+    .listing-add { align-self: start; }
+    td.listings-cell { max-width: 420px; }
   </style>
 </head>
 <body>
@@ -95,6 +102,11 @@
       <p id="desk-msg" class="muted"></p>
       <div id="insert">
         <h2>Insert</h2>
+        <div id="insert-urls">
+          <p class="muted">Redirect URLs — store name + full https link. App Visit opens these.</p>
+          <div id="insert-url-rows" class="listing-ed"></div>
+          <button type="button" id="insert-url-add" class="listing-add" style="margin-top:6px">Add URL</button>
+        </div>
         <textarea id="insert-json" placeholder='{"name":"EXAMPLE"}'></textarea>
         <div class="row" style="margin-top:8px">
           <button type="button" id="insert-save">Save row</button>

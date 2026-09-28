@@ -57,16 +57,59 @@ function accessEmail(request, env) {
   return String(env.STUDIO_EMAIL || "thewears.on@gmail.com").trim().toLowerCase();
 }
 
-function serviceKey(env) {
-  return (
-    env.SUPABASE_SERVICE_ROLE ||
-    env.SERVICE_ROLE ||
-    env.SUPABASE_SERVICE_ROLE_KEY ||
-    env.SERVICE_ROLE_KEY ||
-    env.SECRET_KEY ||
-    env.SB_SERVICE_ROLE ||
-    ""
-  );
+const SERVICE_KEY_NAMES = [
+  "SUPABASE_SERVICE_ROLE",
+  "SERVICE_ROLE",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "SERVICE_ROLE_KEY",
+  "SECRET_KEY",
+  "SB_SERVICE_ROLE",
+  "SB_SECRET_KEY",
+];
+
+async function readSecret(value) {
+  if (value == null || value === "") return "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "object" && typeof value.get === "function") {
+    try {
+      const got = await value.get();
+      return typeof got === "string" ? got.trim() : "";
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function processEnv(name) {
+  try {
+    const v = process?.env?.[name];
+    return typeof v === "string" ? v.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+async function serviceKey(env) {
+  for (const name of SERVICE_KEY_NAMES) {
+    const fromEnv = await readSecret(env?.[name]);
+    if (fromEnv && !fromEnv.startsWith("sb_publishable_")) return fromEnv;
+    const fromProc = processEnv(name);
+    if (fromProc && !fromProc.startsWith("sb_publishable_")) return fromProc;
+  }
+  return "";
+}
+
+function boundNames(env) {
+  const names = ["ASSETS", "WEARS_SUPABASE_URL", "WEARS_SUPABASE_ANON_KEY", "STUDIO_EMAIL", ...SERVICE_KEY_NAMES];
+  return names.filter((name) => {
+    try {
+      const v = env?.[name];
+      return v != null && v !== "";
+    } catch {
+      return false;
+    }
+  });
 }
 
 function sbUrl(env) {
@@ -84,7 +127,7 @@ function errText(data) {
 }
 
 async function sbFetch(env, path, { method = "POST", body, extra = {}, key } = {}) {
-  const token = key || serviceKey(env);
+  const token = key || (await serviceKey(env));
   const res = await fetch(`${sbUrl(env)}${path}`, {
     method,
     headers: {
@@ -185,14 +228,14 @@ async function sessionResponse(request, env) {
   if (!sbUrl(env)) {
     return json(503, { error: "WEARS_SUPABASE_URL missing on the Worker." });
   }
-  if (!serviceKey(env)) {
+  const key = await serviceKey(env);
+  if (!key) {
+    const have = boundNames(env).join(", ") || "none";
     return json(503, {
-      error:
-        "Worker secret not bound. Cloudflare → Workers → twad → Settings → Variables and Secrets → name SUPABASE_SERVICE_ROLE, encrypt the service_role key, then Redeploy.",
+      error: `Worker runtime has no service_role (have: ${have}). Put SUPABASE_SERVICE_ROLE under Settings → Variables and Secrets (Production), not Build.`,
     });
   }
-  const key = serviceKey(env);
-  if (key.startsWith("sb_publishable_") || key.startsWith("eyJ") && key.length < 80) {
+  if (key.startsWith("sb_publishable_") || (key.startsWith("eyJ") && key.length < 80)) {
     return json(503, { error: "Wrong key. Use Supabase service_role / sb_secret_, not the publishable key." });
   }
   const email = accessEmail(request, env);

@@ -4,6 +4,10 @@
   "engines": {
     "node": ">=20 <23"
   },
+  "scripts": {
+    "postinstall": "node scripts/wrap-wrangler.cjs",
+    "deploy": "node scripts/cf-deploy.mjs deploy"
+  },
   "devDependencies": {
     "wrangler": "3.114.17"
   }

@@ -3,7 +3,6 @@ main = "_worker.js"
 compatibility_date = "2026-09-28"
 workers_dev = true
 preview_urls = true
-keep_vars = true
 
 [vars]
 WEARS_SUPABASE_URL = "https://ctldtidtnvctxoquextm.supabase.co"

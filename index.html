@@ -6,50 +6,107 @@
   <meta name="robots" content="noindex, nofollow">
   <title>THE WEARS ON STUDIO</title>
   <style>
-    :root {
-      --ink: #000;
-      --paper: #fff;
-      --ink54: rgba(0, 0, 0, 0.54);
-    }
     * { box-sizing: border-box; }
     html, body {
       margin: 0;
       min-height: 100%;
-      background: var(--paper);
-      color: var(--ink);
-      font-family: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #fff;
+      color: #111;
+      font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
     }
-    main {
+    body { min-height: 100vh; }
+    button, input, select, textarea {
+      font: inherit;
+      color: inherit;
+      background: #fff;
+      border: 1px solid #111;
+      border-radius: 0;
+    }
+    button { cursor: pointer; padding: 6px 10px; }
+    input, textarea { padding: 6px 8px; width: 100%; }
+    textarea { min-height: 72px; font-family: ui-monospace, monospace; }
+    label { display: block; margin: 0 0 4px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .err { color: #a10; white-space: pre-wrap; margin: 8px 0 0; }
+    .ok { color: #161; margin: 8px 0 0; }
+    #gate, #desk { display: none; }
+    #gate.on, #desk.on { display: block; }
+    #gate { max-width: 360px; margin: 12vh auto; padding: 24px; }
+    #gate h1 { margin: 0 0 16px; font-size: 18px; letter-spacing: 0.08em; text-transform: uppercase; }
+    #gate .field { margin-bottom: 12px; }
+    #desk { display: none; min-height: 100vh; }
+    #desk.on { display: grid; grid-template-columns: 220px 1fr; }
+    aside {
+      border-right: 1px solid #111;
+      padding: 16px 12px;
       min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 32px 24px;
     }
-    h1 {
-      margin: 0;
-      font-family: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      font-size: clamp(28px, 6vw, 48px);
-      font-weight: 900;
-      letter-spacing: 0.12em;
-      line-height: 0.95;
-      text-transform: uppercase;
+    aside h1 { margin: 0 0 12px; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; }
+    .tables button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      margin: 0 0 4px;
+      border-color: transparent;
     }
-    p {
-      margin: 18px 0 0;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.22em;
-      text-transform: uppercase;
-      color: var(--ink54);
-    }
+    .tables button.on { border-color: #111; font-weight: 700; }
+    main { padding: 16px; overflow: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    th, td { border: 1px solid #ccc; padding: 4px 6px; vertical-align: top; max-width: 280px; word-break: break-word; }
+    th { text-align: left; background: #f4f4f4; position: sticky; top: 0; }
+    td.pk { font-family: ui-monospace, monospace; font-size: 11px; }
+    .toolbar { margin: 0 0 12px; gap: 8px; }
+    .muted { opacity: 0.55; font-size: 11px; }
+    #who { margin: 12px 0; font-size: 11px; word-break: break-all; }
+    #insert { margin: 16px 0; padding: 12px; border: 1px solid #111; display: none; }
+    #insert.on { display: block; }
+    #insert h2 { margin: 0 0 8px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
   </style>
 </head>
 <body>
-  <main>
-    <div>
-      <h1>THE WEARS ON<br>STUDIO</h1>
-      <p>Editor · admin only</p>
+  <section id="gate">
+    <h1>Studio</h1>
+    <p class="muted">Email + password. Same project as the iOS app. Not Google / Apple.</p>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" type="email" autocomplete="username">
     </div>
-  </main>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password">
+    </div>
+    <button type="button" id="signin">Sign in</button>
+    <p id="gate-err" class="err"></p>
+  </section>
+
+  <section id="desk">
+    <aside>
+      <h1>Tables</h1>
+      <div id="tables" class="tables"></div>
+      <p id="who"></p>
+      <button type="button" id="signout">Sign out</button>
+    </aside>
+    <main>
+      <div class="row toolbar">
+        <strong id="table-name">Pick a table</strong>
+        <button type="button" id="reload" hidden>Reload</button>
+        <button type="button" id="new-row" hidden>Insert</button>
+      </div>
+      <p id="desk-msg" class="muted"></p>
+      <div id="insert">
+        <h2>Insert</h2>
+        <textarea id="insert-json" placeholder='{"name":"EXAMPLE"}'></textarea>
+        <div class="row" style="margin-top:8px">
+          <button type="button" id="insert-save">Save row</button>
+          <button type="button" id="insert-cancel">Cancel</button>
+        </div>
+      </div>
+      <div id="grid"></div>
+    </main>
+  </section>
+
+  <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="studio.js"></script>
 </body>
 </html>

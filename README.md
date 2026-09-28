@@ -13,6 +13,6 @@ Access must sit on **both**:
 
 `_worker.js` returns 403 without `Cf-Access-Jwt-Assertion`. Edge cache is `private, no-store`.
 
-Incognito without Cloudflare login must not show STUDIO. After Access login, the placeholder is expected until the editor ships.
+After Access: email + password (same Supabase as iOS). `users.role` must be `admin`. Table editor writes `artists` / `outfits` / `items` / `archives` via RLS. Nazım: paste `sql/wears_studio_admin_write.sql`, add `https://twad.thewears-on.workers.dev` to Auth redirect URLs.
 
-Keep this repository **private**. Admin login later is email/password + `role = admin` — no Google/Apple on this origin.
+Keep this repository **private**. No Google/Apple on this origin. No `service_role` in the browser.

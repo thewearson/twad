@@ -303,6 +303,9 @@
       if (k === "id") continue;
       sample[k] = null;
     }
+    if (table === "items") {
+      sample.listings = [{ store: "", url: "" }];
+    }
     insertJson.value = JSON.stringify(sample, null, 2);
   });
 

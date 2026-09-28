@@ -165,7 +165,11 @@ async function mintSession(env, email) {
   const password = `Tw${crypto.randomUUID()}A1!`;
   const updated = await sbFetch(env, `/auth/v1/admin/users/${user.id}`, {
     method: "PUT",
-    body: { password, email_confirm: true },
+    body: {
+      password,
+      email_confirm: true,
+      app_metadata: { ...(user.app_metadata || {}), role: "admin" },
+    },
   });
   if (!updated.ok) throw new Error(errText(updated.data) || "Admin password failed.");
   await stampAdmin(env, user.id, email);

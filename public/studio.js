@@ -2,7 +2,7 @@
   const url = window.WEARS_SUPABASE_URL;
   const key = window.WEARS_SUPABASE_ANON_KEY;
   const preferred = ["artists", "outfits", "items", "archives"];
-  const fallbackTables = ["artists", "outfits", "items", "archives", "users", "comments"];
+  const fallbackTables = ["artists", "outfits", "items", "archives", "comments"];
   const REGIONS = ["ALL", "USA", "TR", "EU", "CANADA", "ASIA", "AFRICA"];
   const COUNTRIES = [
     "UNITED STATES", "CANADA", "TÜRKİYE", "UNITED KINGDOM", "FRANCE", "GERMANY",
@@ -150,15 +150,10 @@
     return (s || "x").toUpperCase().replaceAll("İ", "I").replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "x";
   }
 
-  async function currentAdmin() {
+  async function currentUser() {
     const { data: sessionData, error: sessionErr } = await sb.auth.getSession();
     if (sessionErr) throw sessionErr;
-    const user = sessionData.session?.user;
-    if (!user) return null;
-    const { data, error } = await sb.from("users").select("role").eq("id", user.id).maybeSingle();
-    if (error) throw error;
-    if (data?.role === "admin") return user;
-    return null;
+    return sessionData.session?.user || null;
   }
 
   async function mintFromAccess() {
@@ -843,8 +838,9 @@
         .map((p) => p.replace(/^\//, ""))
         .filter((p) => p && !p.includes("/") && !p.includes("{") && p !== "rpc");
       const uniq = [...new Set(names)];
-      const head = preferred.filter((t) => uniq.includes(t));
-      const rest = uniq.filter((t) => !preferred.includes(t)).sort();
+      const skip = new Set(["users"]);
+      const head = preferred.filter((t) => uniq.includes(t) && !skip.has(t));
+      const rest = uniq.filter((t) => !preferred.includes(t) && !skip.has(t)).sort();
       return head.concat(rest);
     } catch {
       return fallbackTables.slice();
@@ -1068,12 +1064,9 @@
     const copy = document.getElementById("gate-copy");
     if (copy) copy.textContent = "Connecting to the archive";
     try {
-      let user = await currentAdmin();
-      if (!user) {
-        await mintFromAccess();
-        user = await currentAdmin();
-      }
-      if (!user) throw new Error("NOT ADMIN.");
+      await mintFromAccess();
+      const user = await currentUser();
+      if (!user) throw new Error("NO SESSION.");
       await bootDesk(user);
     } catch (e) {
       showGate(e.message || String(e));

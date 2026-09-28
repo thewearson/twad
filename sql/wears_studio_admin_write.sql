@@ -9,10 +9,12 @@ STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT COALESCE(
-    (SELECT u.role = 'admin' FROM public.users u WHERE u.id = auth.uid()),
-    false
-  );
+  SELECT
+    COALESCE((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin', false)
+    OR COALESCE(
+      (SELECT u.role = 'admin' FROM public.users u WHERE u.id = auth.uid()),
+      false
+    );
 $$;
 
 REVOKE ALL ON FUNCTION public.wears_viewer_is_admin() FROM PUBLIC;

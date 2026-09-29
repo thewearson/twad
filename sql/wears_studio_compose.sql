@@ -8,6 +8,9 @@ ALTER TABLE public.artists
 ALTER TABLE public.items
   ADD COLUMN IF NOT EXISTS listings jsonb;
 
+ALTER TABLE public.items
+  ADD COLUMN IF NOT EXISTS availability text NOT NULL DEFAULT 'in_stock';
+
 ALTER TABLE public.outfits
   ADD COLUMN IF NOT EXISTS image_urls jsonb;
 

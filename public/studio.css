@@ -600,6 +600,27 @@ label {
   text-transform: uppercase;
 }
 
+.avail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 4px;
+}
+.avail .chip {
+  padding: 8px 12px;
+  font-size: 9px;
+  letter-spacing: 1.2px;
+}
+.card-preview .avail-tag {
+  display: none;
+  margin-top: 8px;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+.card-preview .avail-tag.on { display: block; }
+
 .listing {
   display: grid;
   grid-template-columns: 88px 1fr 72px 44px;

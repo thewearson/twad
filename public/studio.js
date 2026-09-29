@@ -11,6 +11,12 @@
   ];
   const MAX_CARDS = 3;
   const MAX_PHOTOS = 3;
+  const AVAIL = [
+    { id: "in_stock", label: "IN STOCK" },
+    { id: "sold_out", label: "SOLD OUT" },
+    { id: "exclusive", label: "EXCLUSIVE" },
+    { id: "friends_family", label: "FRIENDS & FAMILY" },
+  ];
 
   const sb = window.supabase.createClient(url, key, {
     auth: {
@@ -72,6 +78,7 @@
       imagePreview: "",
       imageUrl: "",
       listings: [{ store: "", url: "", price: "" }],
+      availability: "in_stock",
     };
   }
   function emptyCards() {
@@ -441,6 +448,42 @@
     }
   }
 
+  function normalizeAvail(raw) {
+    const s = String(raw || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+    if (!s || s === "in" || s === "in_stock" || s === "available" || s === "stock") return "in_stock";
+    if (s === "out" || s === "sold" || s === "sold_out" || s === "soldout" || s === "out_of_stock" || s === "oos") return "sold_out";
+    if (s === "exclusive") return "exclusive";
+    if (s === "friends" || s === "friends_family" || s === "friends_and_family" || s === "fnf" || s === "f&f" || s === "f_and_f") {
+      return "friends_family";
+    }
+    return "in_stock";
+  }
+
+  function availLabel(id) {
+    return AVAIL.find((o) => o.id === id)?.label || "";
+  }
+
+  function storeListings(raw) {
+    return asListingArray(raw).filter((r) => r && r._tw !== "avail");
+  }
+
+  function availabilityFromItem(it) {
+    if (!it) return "in_stock";
+    const fromCol = normalizeAvail(it.availability);
+    const meta = asListingArray(it.listings).find((r) => r && r._tw === "avail");
+    const fromList = normalizeAvail(meta?.availability);
+    if (fromCol !== "in_stock") return fromCol;
+    if (fromList !== "in_stock") return fromList;
+    return "in_stock";
+  }
+
+  function stampAvailability(listings, availability) {
+    const rows = storeListings(listings);
+    const a = normalizeAvail(availability);
+    if (a !== "in_stock") rows.push({ _tw: "avail", availability: a });
+    return rows;
+  }
+
   function listingsFrom(root) {
     const out = [];
     root.querySelectorAll(".listing").forEach((row) => {
@@ -478,8 +521,8 @@
 
   function fillListings(root, list) {
     root.replaceChildren();
-    const rowsList = Array.isArray(list) && list.length ? list : [null];
-    rowsList.forEach((item) => addListingRow(root, item));
+    const rowsList = storeListings(list);
+    (rowsList.length ? rowsList : [null]).forEach((item) => addListingRow(root, item));
   }
 
   function paintAvatar(el, artist, size) {
@@ -635,7 +678,7 @@
     for (let i = 0; i < MAX_CARDS; i++) {
       const it = rows[i];
       if (!it) continue;
-      const listings = asListingArray(it.listings).map((l) => ({
+      const listings = storeListings(it.listings).map((l) => ({
         store: l.store || l.name || "",
         url: l.url || l.href || "",
         price: l.price ? String(l.price) : "",
@@ -651,6 +694,7 @@
         imagePreview: src,
         imageUrl: src,
         listings: listings.length ? listings : [{ store: "", url: "", price: "" }],
+        availability: availabilityFromItem(it),
       };
     }
     return next;
@@ -953,6 +997,7 @@
       ph.appendChild(img);
     }
     fillListings(document.getElementById("card-urls"), card.listings);
+    paintAvail();
     const last = cardIndex === MAX_CARDS - 1;
     document.getElementById("card-next").textContent = last
       ? (editingOutfit ? "Save fit check" : "Post fit check")
@@ -966,6 +1011,32 @@
     card.color = document.getElementById("card-color").value.trim().toUpperCase();
     card.price = document.getElementById("card-price").value.trim();
     card.listings = listingsFrom(document.getElementById("card-urls"));
+  }
+
+  function paintAvail() {
+    const host = document.getElementById("card-avail");
+    const live = document.getElementById("card-avail-live");
+    const hint = document.getElementById("card-avail-hint");
+    const current = normalizeAvail(cards[cardIndex].availability);
+    cards[cardIndex].availability = current;
+    host.replaceChildren();
+    AVAIL.forEach((opt) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip" + (opt.id === current ? " on" : "");
+      b.textContent = opt.label;
+      b.addEventListener("click", () => {
+        cards[cardIndex].availability = opt.id;
+        paintAvail();
+      });
+      host.appendChild(b);
+    });
+    const gated = current !== "in_stock";
+    live.textContent = gated ? availLabel(current) : "";
+    live.classList.toggle("on", gated);
+    hint.textContent = gated
+      ? "App shows this label. No store redirect."
+      : "In stock opens the store URL in the app.";
   }
 
   async function collectPhotoUrls(kind) {
@@ -992,7 +1063,11 @@
       if (card.imageBlob) {
         itemUrl = await uploadJpeg(`items/${outfitId}/${i + 1}-${crypto.randomUUID().slice(0, 6)}.jpg`, card.imageBlob);
       }
-      const listings = (card.listings || []).filter((r) => r.url);
+      const listings = stampAvailability(
+        (card.listings || []).filter((r) => r.url),
+        card.availability,
+      );
+      const availability = normalizeAvail(card.availability);
       const row = {
         outfit_id: outfitId,
         artist_id: selected.id,
@@ -1002,10 +1077,11 @@
         color: card.color || null,
         price: parsePrice(card.price),
         image_url: itemUrl || null,
-        purchase_url: listings[0]?.url || null,
+        purchase_url: listings.find((r) => r.url)?.url || null,
         listings,
+        availability,
       };
-      const optional = ["artist_id", "color", "price", "image_url", "purchase_url", "listings", "title", "name"];
+      const optional = ["artist_id", "color", "price", "image_url", "purchase_url", "listings", "title", "name", "availability"];
       if (card.id) {
         const patch = { ...row };
         delete patch.outfit_id;
@@ -1414,7 +1490,7 @@
 
   function fillListingEditor(root, raw) {
     root.replaceChildren();
-    const list = asListingArray(raw);
+    const list = storeListings(raw);
     if (!list.length) {
       addTableListingRow(root, null);
       return;
@@ -1501,7 +1577,19 @@
       for (const k of keys) {
         const td = document.createElement("td");
         if (k === "id") td.className = "pk";
-        if (table === "items" && k === "listings") {
+        if (table === "items" && k === "availability") {
+          const select = document.createElement("select");
+          AVAIL.forEach((opt) => {
+            const o = document.createElement("option");
+            o.value = opt.id;
+            o.textContent = opt.label;
+            select.appendChild(o);
+          });
+          select.value = availabilityFromItem(row);
+          select.dataset.i = String(idx);
+          select.dataset.k = k;
+          td.appendChild(select);
+        } else if (table === "items" && k === "listings") {
           td.className = "listings-cell";
           td.appendChild(renderListingsEditor(row[k]));
         } else {
@@ -1533,12 +1621,17 @@
 
   function patchFromRow(tr) {
     const patch = {};
-    tr.querySelectorAll("input[data-k]").forEach((input) => {
+    tr.querySelectorAll("[data-k]").forEach((input) => {
       patch[input.dataset.k] = parseCell(input.value);
     });
     if (table === "items" && columns.includes("listings")) {
       const ed = tr.querySelector(".listing-ed");
-      if (ed) patch.listings = readListings(ed);
+      if (ed) {
+        const idx = [...tr.parentNode.children].indexOf(tr);
+        const availability = normalizeAvail(patch.availability || availabilityFromItem(rows[idx]));
+        patch.listings = stampAvailability(readListings(ed), availability);
+        patch.availability = availability;
+      }
     }
     return patch;
   }
@@ -1547,6 +1640,9 @@
     const msg = message || "";
     if (/listings/i.test(msg) && /column|schema/i.test(msg)) {
       return `${msg} Nazım SQL: ALTER TABLE public.items ADD COLUMN IF NOT EXISTS listings jsonb;`;
+    }
+    if (/availability/i.test(msg) && /column|schema/i.test(msg)) {
+      return `${msg} Nazım SQL: ALTER TABLE public.items ADD COLUMN IF NOT EXISTS availability text NOT NULL DEFAULT 'in_stock';`;
     }
     return msg;
   }
@@ -1622,7 +1718,11 @@
     }
     if (table === "items") {
       const listings = readListings(insertUrlRows);
-      if (listings.length || columns.includes("listings")) payload.listings = listings;
+      const availability = normalizeAvail(payload.availability);
+      if (listings.length || columns.includes("listings")) {
+        payload.listings = stampAvailability(listings, availability);
+      }
+      payload.availability = availability;
     }
     try {
       await restWrite({ op: "insert", table, row: payload });

@@ -44,6 +44,7 @@
   let artists = [];
   let regionFilter = "ALL";
   let selected = null;
+  let editingId = "";
   let screen = "pick";
   let mode = "fit";
   let fitBlob = null;
@@ -475,6 +476,8 @@
     document.getElementById("pick-msg").textContent = list.length ? `${list.length} STAR(S).` : "NO STARS IN THIS REGION.";
     host.replaceChildren();
     list.forEach((artist) => {
+      const cell = document.createElement("div");
+      cell.className = "star-cell";
       const b = document.createElement("button");
       b.type = "button";
       b.className = "star";
@@ -489,7 +492,16 @@
       meta.innerHTML = `<span>${artist.country || ""}</span><span>→</span>`;
       b.append(av, name, meta);
       b.addEventListener("click", () => openArtist(artist));
-      host.appendChild(b);
+      const ed = document.createElement("button");
+      ed.type = "button";
+      ed.className = "star-edit";
+      ed.textContent = "Edit";
+      ed.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        openStarForm(artist);
+      });
+      cell.append(b, ed);
+      host.appendChild(cell);
     });
   }
 
@@ -640,10 +652,67 @@
     return outfit;
   }
 
+  function ensureCountryOption(country) {
+    const select = document.getElementById("star-country");
+    const value = (country || "").toUpperCase();
+    if (!value) return;
+    const exists = [...select.options].some((o) => o.value.toUpperCase() === value);
+    if (!exists) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = value;
+      select.appendChild(opt);
+    }
+    const match = [...select.options].find((o) => o.value.toUpperCase() === value);
+    select.value = match ? match.value : value;
+  }
+
+  function openStarForm(artist) {
+    editingId = artist?.id || "";
+    if (artist) selected = artist;
+    ppBlob = null;
+    if (ppPreview) URL.revokeObjectURL(ppPreview);
+    ppPreview = "";
+    const drop = document.getElementById("pp-drop");
+    drop.querySelector("img")?.remove();
+    document.getElementById("star-msg").textContent = "";
+    document.getElementById("star-step").textContent = artist ? "Edit star" : "New star";
+    document.getElementById("star-hint").textContent = artist
+      ? "Fix name, Instagram, country, or swap the portrait."
+      : "Name, Instagram, country, portrait. Country sets content region.";
+    document.getElementById("star-save").textContent = artist ? "Save edits" : "Save star";
+    document.getElementById("pp-label").textContent = artist ? "Star PP · tap to replace" : "Star PP · 640px min";
+    document.getElementById("star-name").value = artist?.name || "";
+    document.getElementById("star-ig").value = artist?.instagram ? `@${String(artist.instagram).replace(/^@/, "")}` : "";
+    ensureCountryOption(artist?.country || "UNITED STATES");
+    if (!artist) document.getElementById("star-country").value = "UNITED STATES";
+    const existing = artist?.image_url || artist?.imageUrl;
+    if (existing) setDropPreview(drop, existing);
+    syncRegionHint();
+    showScreen("star");
+  }
+
+  async function patchLoose(id, payload, optionalKeys) {
+    let patch = { ...payload };
+    let keys = optionalKeys.slice();
+    for (;;) {
+      try {
+        await restWrite({ op: "update", table: "artists", id, patch });
+        return;
+      } catch (error) {
+        const msg = error.message || "";
+        const hit = keys.find((k) => msg.toLowerCase().includes(k.toLowerCase()));
+        if (!hit) throw error;
+        delete patch[hit];
+        keys = keys.filter((k) => k !== hit);
+      }
+    }
+  }
+
   async function saveStar() {
     const name = document.getElementById("star-name").value.trim().toUpperCase();
     const country = document.getElementById("star-country").value;
-    const region = regionForCountry(country);
+    const region = regionForCountry(country) || "ALL";
     const instagram = igHandle(document.getElementById("star-ig").value);
     const msg = document.getElementById("star-msg");
     msg.textContent = "";
@@ -651,14 +720,27 @@
       snack("NAME REQUIRED.", true);
       return;
     }
-    if (!ppBlob) {
+    if (!editingId && !ppBlob) {
       snack("STAR PP REQUIRED. 640PX+ SQUARE CROP.", true);
       return;
     }
     try {
       msg.textContent = "SAVING…";
-      const path = `stars/${slug(name)}-${crypto.randomUUID().slice(0, 8)}.jpg`;
-      const imageUrl = await uploadJpeg(path, ppBlob);
+      let imageUrl = "";
+      if (ppBlob) {
+        const path = `stars/${slug(name)}-${crypto.randomUUID().slice(0, 8)}.jpg`;
+        imageUrl = await uploadJpeg(path, ppBlob);
+      }
+      if (editingId) {
+        const patch = { name, country, region, instagram };
+        if (imageUrl) patch.image_url = imageUrl;
+        await patchLoose(editingId, patch, ["instagram", "region"]);
+        snack("STAR UPDATED.");
+        const id = editingId;
+        await loadArtists();
+        openArtist(artists.find((a) => a.id === id) || { id, name, country, region, image_url: imageUrl || selected?.image_url, instagram });
+        return;
+      }
       const row = await insertLoose("artists", {
         name,
         country,
@@ -668,7 +750,7 @@
       }, ["instagram", "region"]);
       snack("STAR SAVED.");
       await loadArtists();
-      openArtist(artists.find((a) => a.id === row.id) || { ...row, name, country, region, image_url: imageUrl });
+      openArtist(artists.find((a) => a.id === row.id) || { ...row, name, country, region, image_url: imageUrl, instagram });
     } catch (e) {
       const text = e.message || String(e);
       msg.textContent = text;
@@ -685,14 +767,11 @@
   syncRegionHint();
 
   document.getElementById("add-star").addEventListener("click", () => {
-    ppBlob = null;
-    if (ppPreview) URL.revokeObjectURL(ppPreview);
-    ppPreview = "";
-    document.getElementById("star-name").value = "";
-    document.getElementById("star-ig").value = "";
-    document.getElementById("pp-drop").querySelector("img")?.remove();
-    document.getElementById("star-msg").textContent = "";
-    showScreen("star");
+    selected = null;
+    openStarForm(null);
+  });
+  document.getElementById("edit-star").addEventListener("click", () => {
+    if (selected) openStarForm(selected);
   });
   document.getElementById("star-save").addEventListener("click", saveStar);
   document.getElementById("pp-file").addEventListener("change", async (e) => {
@@ -825,8 +904,12 @@
       showScreen("photo");
       return;
     }
-    if (screen === "photo" || screen === "star") {
-      showScreen(selected && screen === "photo" ? "artist" : "pick");
+    if (screen === "star") {
+      showScreen(editingId && selected ? "artist" : "pick");
+      return;
+    }
+    if (screen === "photo") {
+      showScreen(selected ? "artist" : "pick");
       return;
     }
     if (screen === "artist") showScreen("pick");

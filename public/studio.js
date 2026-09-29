@@ -344,8 +344,8 @@
 
   const HD = {
     pp: { minShort: 640, maxEdge: 1080, square: true, quality: 0.92 },
-    fit: { minShort: 1080, maxEdge: 1440, square: false, quality: 0.92 },
-    story: { minShort: 1080, maxEdge: 1920, square: false, quality: 0.92 },
+    fit: { minShort: 1080, maxEdge: 2560, square: false, quality: 0.96 },
+    story: { minShort: 1080, maxEdge: 2560, square: false, quality: 0.96 },
     item: { minShort: 700, maxEdge: 2200, square: false, quality: 0.96 },
   };
 
@@ -358,17 +358,15 @@
   async function pickHd(file, kind) {
     const img = await loadImageFile(file);
     const spec = HD[kind];
-    if (kind === "item") {
-      const w = img.naturalWidth || img.width;
-      const h = img.naturalHeight || img.height;
-      const short = Math.min(w, h);
-      const long = Math.max(w, h);
-      if (short < spec.minShort) {
-        throw new Error(`PHOTO TOO SMALL. ${w}×${h}. NEED ${spec.minShort}PX+ ON THE SHORT SIDE.`);
-      }
-      if (isJpegFile(file) && long <= spec.maxEdge && file.size <= 8 * 1024 * 1024) {
-        return file;
-      }
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    const short = Math.min(w, h);
+    const long = Math.max(w, h);
+    if (short < spec.minShort) {
+      throw new Error(`PHOTO TOO SMALL. ${w}×${h}. NEED ${spec.minShort}PX+ ON THE SHORT SIDE.`);
+    }
+    if (!spec.square && isJpegFile(file) && long <= spec.maxEdge && file.size <= 8 * 1024 * 1024) {
+      return file;
     }
     return toJpeg(img, spec);
   }

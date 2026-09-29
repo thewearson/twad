@@ -103,23 +103,104 @@
     backBtn.style.visibility = name === "pick" ? "hidden" : "visible";
   }
 
+  const CHIP_REGIONS = new Set(["USA", "TR", "EU", "CANADA", "ASIA", "AFRICA", "ALL"]);
+  const SEED_STARS = [
+    ["NAV", "CANADA", "CANADA"],
+    ["DRAKE", "CANADA", "CANADA"],
+    ["RIHANNA", "BARBADOS", "ALL"],
+    ["MOTIVE", "TÜRKİYE", "TR"],
+    ["LIL ZEY", "TÜRKİYE", "TR"],
+    ["KHONTKAR", "TÜRKİYE", "TR"],
+    ["BEGE", "TÜRKİYE", "TR"],
+    ["YUNG OUZO", "TÜRKİYE", "TR"],
+    ["YUNG CIHAD", "TÜRKİYE", "TR"],
+    ["UZI", "TÜRKİYE", "TR"],
+    ["EZHEL", "TÜRKİYE", "TR"],
+    ["CENTRAL CEE", "UNITED KINGDOM", "EU"],
+    ["21 SAVAGE", "UNITED KINGDOM", "EU"],
+    ["SKEPTA", "UNITED KINGDOM", "EU"],
+    ["LANCEY FOUX", "UNITED KINGDOM", "EU"],
+    ["JACKSON WANG", "CHINA", "ASIA"],
+    ["NIGO", "JAPAN", "ASIA"],
+    ["VERDY", "JAPAN", "ASIA"],
+    ["LITHE", "AUSTRALIA", "ALL"],
+    ["REMA", "NIGERIA", "AFRICA"],
+  ];
+
+  function foldName(name) {
+    return (name || "").toUpperCase().replaceAll("İ", "I").replace(/I\u0307/g, "I").replace(/[^A-Z0-9]/g, "");
+  }
+
+  const SEED_BY_KEY = Object.fromEntries(SEED_STARS.map(([name, country, region]) => [foldName(name), { country, region }]));
+
+  function countryClearlyUs(country) {
+    const c = (country || "").toUpperCase().replaceAll("İ", "I").trim();
+    if (!c) return false;
+    if (c === "US" || c === "USA" || c === "U.S" || c === "U.S.A") return true;
+    return c.includes("UNITED STATES");
+  }
+
+  function chipRegion(raw) {
+    const r = (raw || "").trim().toUpperCase().replaceAll("İ", "I");
+    return CHIP_REGIONS.has(r) ? r : "";
+  }
+
   function regionForCountry(country) {
     const c = (country || "").toUpperCase().replace(/İ/g, "I").replace(/I\u0307/g, "I").trim();
-    if (!c) return "ALL";
+    if (!c) return "";
     if (c === "TR" || c.includes("TURK") || c.includes("TURKIYE")) return "TR";
-    if (c.includes("CANADA")) return "CANADA";
-    if (c.includes("NIGERIA") || c.includes("GHANA") || c.includes("AFRICA")) return "AFRICA";
-    if (c.includes("JAPAN") || c.includes("CHINA") || c.includes("KOREA") || c.includes("ASIA")) return "ASIA";
-    if (c.includes("BARBADOS") || c.includes("JAMAICA") || c.includes("AUSTRALIA")) return "ALL";
-    if (c === "US" || c === "USA" || c.includes("UNITED STATES")) return "USA";
     if (
       c === "EU" || c === "UK" || c === "GB" ||
-      c.includes("UNITED KINGDOM") || c.includes("ENGLAND") || c.includes("FRANCE") ||
-      c.includes("GERMANY") || c.includes("ITALY") || c.includes("SPAIN") ||
-      c.includes("NETHERLAND") || c.includes("POLAND") || c.includes("PORTUGAL") ||
-      c.includes("UKRAINE") || c.includes("EUROPE")
+      c.includes("UNITED KINGDOM") || c.includes("ENGLAND") || c.includes("BRITAIN") ||
+      c.includes("SCOTLAND") || c.includes("WALES") || c.includes("IRELAND") ||
+      c.includes("FRANCE") || c.includes("GERMANY") || c.includes("ITALY") ||
+      c.includes("SPAIN") || c.includes("NETHERLAND") || c.includes("SWEDEN") ||
+      c.includes("NORWAY") || c.includes("DENMARK") || c.includes("POLAND") ||
+      c.includes("BELGIUM") || c.includes("AUSTRIA") || c.includes("SWITZ") ||
+      c.includes("PORTUGAL") || c.includes("GREECE") || c.includes("UKRAINE") ||
+      c.includes("EUROPE")
     ) return "EU";
-    return "ALL";
+    if (c.includes("CANADA")) return "CANADA";
+    if (c.includes("NIGERIA") || c.includes("GHANA") || c.includes("AFRICA")) return "AFRICA";
+    if (c.includes("JAPAN") || c.includes("CHINA") || c.includes("KOREA") || c.includes("HONG KONG") || c.includes("TAIWAN") || c.includes("ASIA")) return "ASIA";
+    if (c.includes("BARBADOS") || c.includes("JAMAICA") || c.includes("AUSTRALIA")) return "ALL";
+    if (countryClearlyUs(c)) return "USA";
+    return "";
+  }
+
+  function placeArtist(row) {
+    const name = (row.name || "").toUpperCase();
+    const seed = SEED_BY_KEY[foldName(name)];
+    let country = (row.country || row.nation || "").toUpperCase().trim();
+    let region = chipRegion(row.region);
+    if (!region) region = regionForCountry(country);
+    if (seed) {
+      const seedIsUs = seed.region === "USA";
+      const dbIsUs = countryClearlyUs(country) || region === "USA";
+      if (!country || !region || (!seedIsUs && dbIsUs)) {
+        if (!country || (!seedIsUs && dbIsUs)) country = seed.country;
+        region = seed.region;
+      }
+    }
+    if (!region) region = "ALL";
+    if (!country) {
+      country = region === "TR" ? "TÜRKİYE"
+        : region === "EU" ? "UNITED KINGDOM"
+        : region === "USA" ? "UNITED STATES"
+        : region === "CANADA" ? "CANADA"
+        : region === "ASIA" ? "ASIA"
+        : region === "AFRICA" ? "NIGERIA"
+        : "";
+    }
+    const origCountry = (row.country || "").toUpperCase().trim();
+    const origRegion = chipRegion(row.region);
+    return {
+      ...row,
+      name,
+      country,
+      region,
+      _stamp: Boolean(row.id) && (country !== origCountry || region !== origRegion),
+    };
   }
 
   function artistMark(name) {
@@ -412,21 +493,32 @@
     });
   }
 
+  async function stampArtistPlaces(list) {
+    for (const artist of list) {
+      if (!artist._stamp || !artist.id) continue;
+      const patch = { country: artist.country, region: artist.region };
+      try {
+        await restWrite({ op: "update", table: "artists", id: artist.id, patch });
+      } catch {
+        try {
+          await restWrite({ op: "update", table: "artists", id: artist.id, patch: { country: artist.country } });
+        } catch {}
+      }
+      artist._stamp = false;
+    }
+  }
+
   async function loadArtists() {
     const { data, error } = await sb.from("artists").select("*").limit(500);
     if (error) {
       snack(error.message, true);
       artists = [];
     } else {
-      artists = (data || []).map((row) => ({
-        ...row,
-        name: (row.name || "").toUpperCase(),
-        country: (row.country || "").toUpperCase(),
-        region: (row.region || regionForCountry(row.country || "")).toUpperCase(),
-      }));
+      artists = (data || []).map(placeArtist);
     }
     renderChips();
     renderGrid();
+    stampArtistPlaces(artists);
   }
 
   function openArtist(artist) {

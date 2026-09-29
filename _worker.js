@@ -235,6 +235,107 @@ async function mintSession(env, email) {
   return { access_token: access, refresh_token: refresh, email };
 }
 
+const WRITE_TABLES = new Set(["artists", "outfits", "items", "archives"]);
+const PHOTO_BUCKET = "image-artist";
+
+function safeStoragePath(raw) {
+  const p = String(raw || "").replace(/^\/+/, "");
+  if (p.includes("..") || p.includes("//") || p.includes("\\")) return "";
+  if (!/^(stars|fits|stories|items)\/[A-Za-z0-9._/-]+\.jpe?g$/i.test(p)) return "";
+  return p;
+}
+
+function publicPhotoUrl(env, path) {
+  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  return `${sbUrl(env)}/storage/v1/object/public/${PHOTO_BUCKET}/${encoded}`;
+}
+
+async function uploadResponse(request, env) {
+  if (request.method !== "POST") return json(405, { error: "POST only." });
+  const key = await serviceKey(env);
+  if (!key) return json(503, { error: "NEED_VAULT", code: "NEED_VAULT" });
+  const path = safeStoragePath(new URL(request.url).searchParams.get("path"));
+  if (!path) return json(400, { error: "Bad photo path." });
+  const bytes = await request.arrayBuffer();
+  if (!bytes.byteLength) return json(400, { error: "Empty photo." });
+  if (bytes.byteLength > 12 * 1024 * 1024) return json(400, { error: "Photo over 12MB." });
+  const href = `${sbUrl(env)}/storage/v1/object/${PHOTO_BUCKET}/${path.split("/").map(encodeURIComponent).join("/")}`;
+  const headers = {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    "Content-Type": request.headers.get("content-type") || "image/jpeg",
+    "x-upsert": "true",
+  };
+  let res = await fetch(href, { method: "POST", headers, body: bytes });
+  if (res.status === 409) {
+    res = await fetch(href, { method: "PUT", headers, body: bytes });
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    let data = null;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { message: text };
+    }
+    return json(res.status, { error: errText(data) || "Upload failed." });
+  }
+  return json(200, { publicUrl: publicPhotoUrl(env, path) });
+}
+
+async function restResponse(request, env) {
+  if (request.method !== "POST") return json(405, { error: "POST only." });
+  const key = await serviceKey(env);
+  if (!key) return json(503, { error: "NEED_VAULT", code: "NEED_VAULT" });
+  let body = {};
+  try {
+    body = await request.json();
+  } catch {
+    return json(400, { error: "Bad JSON." });
+  }
+  const table = String(body.table || "");
+  if (!WRITE_TABLES.has(table)) return json(400, { error: "Table not allowed." });
+  const op = String(body.op || "");
+  if (op === "insert") {
+    const row = body.row;
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      return json(400, { error: "Insert needs a row." });
+    }
+    const res = await sbFetch(env, `/rest/v1/${table}`, {
+      extra: { Prefer: "return=representation" },
+      body: row,
+    });
+    if (!res.ok) return json(res.status, { error: errText(res.data) || "Insert failed." });
+    const rowOut = Array.isArray(res.data) ? res.data[0] : res.data;
+    return json(200, { row: rowOut });
+  }
+  if (op === "update") {
+    const id = body.id;
+    const patch = body.patch;
+    if (id == null || id === "" || !patch || typeof patch !== "object") {
+      return json(400, { error: "Update needs id and patch." });
+    }
+    const res = await sbFetch(env, `/rest/v1/${table}?id=eq.${encodeURIComponent(String(id))}`, {
+      method: "PATCH",
+      extra: { Prefer: "return=minimal" },
+      body: patch,
+    });
+    if (!res.ok) return json(res.status, { error: errText(res.data) || "Update failed." });
+    return json(200, { ok: true });
+  }
+  if (op === "delete") {
+    const id = body.id;
+    if (id == null || id === "") return json(400, { error: "Delete needs id." });
+    const res = await sbFetch(env, `/rest/v1/${table}?id=eq.${encodeURIComponent(String(id))}`, {
+      method: "DELETE",
+      extra: { Prefer: "return=minimal" },
+    });
+    if (!res.ok) return json(res.status, { error: errText(res.data) || "Delete failed." });
+    return json(200, { ok: true });
+  }
+  return json(400, { error: "Unknown write." });
+}
+
 async function sessionResponse(request, env) {
   if (request.method !== "GET") return json(405, { error: "GET only." });
   if (!sbUrl(env)) {
@@ -265,6 +366,12 @@ export default {
     const path = new URL(request.url).pathname.replace(/\/$/, "") || "/";
     if (path === "/api/session") {
       return sessionResponse(request, env);
+    }
+    if (path === "/api/upload") {
+      return uploadResponse(request, env);
+    }
+    if (path === "/api/rest") {
+      return restResponse(request, env);
     }
     if (path === "/api/vault") {
       const stub = vaultStub(env);

@@ -10,7 +10,6 @@
     "SOUTH KOREA", "CHINA", "NIGERIA", "BARBADOS", "AUSTRALIA",
   ];
   const MAX_CARDS = 3;
-  const BUCKET = "image-artist";
 
   const sb = window.supabase.createClient(url, key, {
     auth: {
@@ -264,32 +263,44 @@
   }
 
   async function uploadJpeg(path, blob) {
-    const { error } = await sb.storage.from(BUCKET).upload(path, blob, {
-      contentType: "image/jpeg",
-      upsert: true,
+    const res = await fetch(`/api/upload?path=${encodeURIComponent(path)}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "image/jpeg" },
+      body: blob,
     });
-    if (error) {
-      const msg = error.message || String(error);
-      if (/bucket|policy|row-level|permission|not found/i.test(msg)) {
-        throw new Error(`${msg} Nazım SQL: studio storage write on ${BUCKET}.`);
-      }
-      throw error;
-    }
-    const { data } = sb.storage.from(BUCKET).getPublicUrl(path);
-    return data.publicUrl;
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `UPLOAD ${res.status}`);
+    if (!body.publicUrl) throw new Error("UPLOAD HAD NO URL.");
+    return body.publicUrl;
+  }
+
+  async function restWrite(payload) {
+    const res = await fetch("/api/rest", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `WRITE ${res.status}`);
+    return body;
   }
 
   async function insertLoose(tableName, payload, optionalKeys) {
-    let body = { ...payload };
+    let row = { ...payload };
     let keys = optionalKeys.slice();
     for (;;) {
-      const { data, error } = await sb.from(tableName).insert(body).select().single();
-      if (!error) return data;
-      const msg = error.message || "";
-      const hit = keys.find((k) => msg.toLowerCase().includes(k.toLowerCase()));
-      if (!hit) throw error;
-      delete body[hit];
-      keys = keys.filter((k) => k !== hit);
+      try {
+        const out = await restWrite({ op: "insert", table: tableName, row });
+        return out.row;
+      } catch (error) {
+        const msg = error.message || "";
+        const hit = keys.find((k) => msg.toLowerCase().includes(k.toLowerCase()));
+        if (!hit) throw error;
+        delete row[hit];
+        keys = keys.filter((k) => k !== hit);
+      }
     }
   }
 
@@ -992,8 +1003,9 @@
       return;
     }
     setDeskMsg("Saving…");
-    const { error } = await sb.from(table).update(patch).eq("id", prev.id);
-    if (error) {
+    try {
+      await restWrite({ op: "update", table, id: prev.id, patch });
+    } catch (error) {
       setDeskMsg(listingsColumnError(error.message), "err");
       return;
     }
@@ -1005,8 +1017,9 @@
     const prev = rows[idx];
     if (prev?.id == null) return;
     if (!window.confirm(`Delete ${table} ${prev.id}?`)) return;
-    const { error } = await sb.from(table).delete().eq("id", prev.id);
-    if (error) {
+    try {
+      await restWrite({ op: "delete", table, id: prev.id });
+    } catch (error) {
       setDeskMsg(error.message, "err");
       return;
     }
@@ -1030,8 +1043,9 @@
       const listings = readListings(insertUrlRows);
       if (listings.length || columns.includes("listings")) payload.listings = listings;
     }
-    const { error } = await sb.from(table).insert(payload);
-    if (error) {
+    try {
+      await restWrite({ op: "insert", table, row: payload });
+    } catch (error) {
       setDeskMsg(listingsColumnError(error.message), "err");
       return;
     }

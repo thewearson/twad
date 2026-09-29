@@ -12,6 +12,14 @@
     <img class="logo" src="logo_light.png" alt="THE WEARS ON">
     <h1>Studio</h1>
     <p class="lede muted" id="gate-copy">Connecting to the archive</p>
+    <form id="gate-vault" class="hidden">
+      <p class="hint">Supabase → Project Settings → API → <b>service_role</b>. Paste once. It stays on the Worker, not in the browser.</p>
+      <div class="field">
+        <label for="vault-key">Archive key</label>
+        <input id="vault-key" type="password" autocomplete="off" spellcheck="false">
+      </div>
+      <button type="submit" class="btn ink">Save</button>
+    </form>
     <p id="gate-err" class="err"></p>
   </section>
 

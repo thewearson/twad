@@ -72,6 +72,17 @@ label {
   text-align: center;
   margin: 0 0 28px;
 }
+#gate .hint {
+  text-align: left;
+  margin: 0 0 20px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1.45;
+  color: var(--ink54);
+  text-transform: none;
+}
+#gate .hint b { color: var(--ink); font-weight: 800; }
 #gate .or {
   margin: 20px 0 16px;
   text-align: center;

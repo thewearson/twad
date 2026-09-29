@@ -4,6 +4,12 @@
   "compatibility_date": "2026-09-28",
   "workers_dev": true,
   "preview_urls": true,
+  "durable_objects": {
+    "bindings": [{ "name": "VAULT", "class_name": "StudioVault" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["StudioVault"] }
+  ],
   "vars": {
     "WEARS_SUPABASE_URL": "https://ctldtidtnvctxoquextm.supabase.co",
     "WEARS_SUPABASE_ANON_KEY": "sb_publishable_t3zzhT3K_iR0FWuFCA4-Ow_Rdn8zsQk",

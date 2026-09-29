@@ -165,12 +165,33 @@
     } catch {
       throw new Error(`SESSION ${res.status}. Deploy is not serving /api/session.`);
     }
-    if (!res.ok) throw new Error(body.error || `SESSION ${res.status}`);
+    if (!res.ok) {
+      const err = new Error(body.error || `SESSION ${res.status}`);
+      err.code = body.code || body.error;
+      throw err;
+    }
     const { error } = await sb.auth.setSession({
       access_token: body.access_token,
       refresh_token: body.refresh_token,
     });
     if (error) throw error;
+  }
+
+  function showVault() {
+    const form = document.getElementById("gate-vault");
+    const copy = document.getElementById("gate-copy");
+    if (copy) copy.textContent = "Archive key";
+    if (form) form.classList.remove("hidden");
+    showGate("");
+  }
+
+  async function enterStudio() {
+    await mintFromAccess();
+    const user = await currentUser();
+    if (!user) throw new Error("NO SESSION.");
+    const form = document.getElementById("gate-vault");
+    if (form) form.classList.add("hidden");
+    await bootDesk(user);
   }
 
   async function loadImageFile(file) {
@@ -1059,17 +1080,41 @@
     addTableListingRow(insertUrlRows, null);
   });
 
+  const vaultForm = document.getElementById("gate-vault");
+  if (vaultForm) {
+    vaultForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const input = document.getElementById("vault-key");
+      const value = (input && input.value || "").trim();
+      showGate("");
+      try {
+        const res = await fetch("/api/vault", {
+          method: "PUT",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ key: value }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error || `VAULT ${res.status}`);
+        if (input) input.value = "";
+        const copy = document.getElementById("gate-copy");
+        if (copy) copy.textContent = "Connecting to the archive";
+        await enterStudio();
+      } catch (e) {
+        showGate(e.message || String(e));
+      }
+    });
+  }
+
   (async () => {
     showGate("");
     const copy = document.getElementById("gate-copy");
     if (copy) copy.textContent = "Connecting to the archive";
     try {
-      await mintFromAccess();
-      const user = await currentUser();
-      if (!user) throw new Error("NO SESSION.");
-      await bootDesk(user);
+      await enterStudio();
     } catch (e) {
-      showGate(e.message || String(e));
+      if (e.code === "NEED_VAULT" || e.message === "NEED_VAULT") showVault();
+      else showGate(e.message || String(e));
     }
   })();
 })();

@@ -90,6 +90,20 @@ function processEnv(name) {
   }
 }
 
+function vaultStub(env) {
+  if (!env.VAULT) return null;
+  return env.VAULT.get(env.VAULT.idFromName("service_role"));
+}
+
+async function vaultKey(env) {
+  const stub = vaultStub(env);
+  if (!stub) return "";
+  const res = await stub.fetch("https://twad.vault/key");
+  if (!res.ok) return "";
+  const data = await res.json().catch(() => ({}));
+  return String(data.key || "").trim();
+}
+
 async function serviceKey(env) {
   for (const name of SERVICE_KEY_NAMES) {
     const fromEnv = await readSecret(env?.[name]);
@@ -97,19 +111,17 @@ async function serviceKey(env) {
     const fromProc = processEnv(name);
     if (fromProc && !fromProc.startsWith("sb_publishable_")) return fromProc;
   }
-  return "";
+  return vaultKey(env);
 }
 
-function boundNames(env) {
-  const names = ["ASSETS", "WEARS_SUPABASE_URL", "WEARS_SUPABASE_ANON_KEY", "STUDIO_EMAIL", ...SERVICE_KEY_NAMES];
-  return names.filter((name) => {
-    try {
-      const v = env?.[name];
-      return v != null && v !== "";
-    } catch {
-      return false;
-    }
-  });
+function keyError(key) {
+  if (!key) return "Empty key.";
+  if (key.startsWith("sb_publishable_")) return "Wrong key. Use service_role, not the publishable key.";
+  if (key.startsWith("eyJ") && key.length < 80) return "Wrong key. Use service_role / sb_secret_.";
+  if (!(key.startsWith("sb_secret_") || key.startsWith("eyJ"))) {
+    return "Wrong key. Use service_role / sb_secret_.";
+  }
+  return "";
 }
 
 function sbUrl(env) {
@@ -230,10 +242,7 @@ async function sessionResponse(request, env) {
   }
   const key = await serviceKey(env);
   if (!key) {
-    const have = boundNames(env).join(", ") || "none";
-    return json(503, {
-      error: `Worker runtime has no service_role (have: ${have}). Put SUPABASE_SERVICE_ROLE under Settings → Variables and Secrets (Production), not Build.`,
-    });
+    return json(503, { error: "NEED_VAULT", code: "NEED_VAULT" });
   }
   if (key.startsWith("sb_publishable_") || (key.startsWith("eyJ") && key.length < 80)) {
     return json(503, { error: "Wrong key. Use Supabase service_role / sb_secret_, not the publishable key." });
@@ -257,9 +266,43 @@ export default {
     if (path === "/api/session") {
       return sessionResponse(request, env);
     }
+    if (path === "/api/vault") {
+      const stub = vaultStub(env);
+      if (!stub) return json(503, { error: "Vault binding missing.", code: "NEED_VAULT" });
+      if (request.method === "GET") {
+        const key = await vaultKey(env);
+        return json(200, { ready: Boolean(key) });
+      }
+      if (request.method !== "PUT") return json(405, { error: "PUT only." });
+      return stub.fetch(request);
+    }
     if (!env.ASSETS) {
       return locked(403, "Forbidden");
     }
     return withLockHeaders(await env.ASSETS.fetch(request));
   },
 };
+
+export class StudioVault {
+  constructor(state) {
+    this.state = state;
+  }
+  async fetch(request) {
+    if (request.method === "GET") {
+      const key = (await this.state.storage.get("service_role")) || "";
+      return json(200, { key: String(key) });
+    }
+    if (request.method !== "PUT") return json(405, { error: "PUT only." });
+    let body = {};
+    try {
+      body = await request.json();
+    } catch {
+      body = {};
+    }
+    const key = String(body.key || "").trim();
+    const err = keyError(key);
+    if (err) return json(400, { error: err });
+    await this.state.storage.put("service_role", key);
+    return json(200, { ok: true });
+  }
+}

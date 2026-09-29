@@ -110,13 +110,11 @@
 
     <div id="screen-photo" class="screen hidden">
       <div class="wrap">
-        <p class="step" id="photo-step">Fit check · photo</p>
-        <p class="hint" id="photo-hint">1080px minimum. Instagram HD. Soft photos are rejected.</p>
-        <label class="drop" id="fit-drop">
-          <input id="fit-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
-          <div class="plus">+</div>
-          <span id="fit-label">Add photo</span>
-        </label>
+        <p class="step" id="photo-step">Fit check · photos</p>
+        <p class="hint" id="photo-hint">Up to 3. Swipe like Instagram. 1080px min.</p>
+        <div id="photo-scroller" class="photo-scroller"></div>
+        <div id="photo-dots" class="photo-dots"></div>
+        <input id="fit-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
         <div class="dock-inner" style="margin-top:20px">
           <button type="button" class="btn ink" id="photo-next">Next</button>
         </div>

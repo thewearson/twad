@@ -10,6 +10,7 @@
     "SOUTH KOREA", "CHINA", "NIGERIA", "BARBADOS", "AUSTRALIA",
   ];
   const MAX_CARDS = 3;
+  const MAX_PHOTOS = 3;
 
   const sb = window.supabase.createClient(url, key, {
     auth: {
@@ -47,12 +48,12 @@
   let editingId = "";
   let screen = "pick";
   let mode = "fit";
-  let fitBlob = null;
-  let fitPreview = "";
-  let storyBlob = null;
-  let storyPreview = "";
   let ppBlob = null;
   let ppPreview = "";
+  let photos = [];
+  let photoSlide = 0;
+  let photoPick = -1;
+  let photoScrollerBound = false;
   let cardIndex = 0;
   let cards = emptyCards();
   let snackTimer = 0;
@@ -722,7 +723,9 @@
       const n = document.createElement("div");
       n.className = "n";
       const count = (itemsByOutfit[post.id] || []).length;
-      n.textContent = isStoryPost(post) ? "STORY" : `${count} CARD${count === 1 ? "" : "S"}`;
+      n.textContent = isStoryPost(post)
+        ? "STORY"
+        : `${count} CARD${count === 1 ? "" : "S"} · ${photosFromOutfit(post).length} PHOTO`;
       meta.append(kind, when, n);
       const edit = document.createElement("span");
       edit.className = "edit";
@@ -743,29 +746,140 @@
     });
   }
 
+  function photosFromOutfit(row) {
+    const cover = row?.image_url || row?.imageUrl || "";
+    const raw = row?.image_urls ?? row?.imageUrls;
+    let extra = [];
+    if (Array.isArray(raw)) extra = raw;
+    else if (typeof raw === "string" && raw.trim()) {
+      try {
+        const parsed = JSON.parse(raw);
+        extra = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        extra = [];
+      }
+    }
+    const out = [];
+    const add = (v) => {
+      const s = String(v || "").trim();
+      if (!s || s === "null" || out.includes(s) || out.length >= MAX_PHOTOS) return;
+      out.push(s);
+    };
+    extra.forEach(add);
+    if (cover && !out.includes(cover)) out.unshift(cover);
+    return out.slice(0, MAX_PHOTOS);
+  }
+
+  function photoCap() {
+    return mode === "story" ? 1 : MAX_PHOTOS;
+  }
+
+  function bindPhotoScroller() {
+    if (photoScrollerBound) return;
+    photoScrollerBound = true;
+    const scroller = document.getElementById("photo-scroller");
+    scroller.addEventListener("scroll", () => {
+      const w = scroller.clientWidth || 1;
+      photoSlide = Math.round(scroller.scrollLeft / w);
+      paintPhotoDots();
+    }, { passive: true });
+  }
+
+  function paintPhotoDots() {
+    const dots = document.getElementById("photo-dots");
+    const cap = photoCap();
+    const total = photos.length < cap ? photos.length + 1 : Math.max(photos.length, 1);
+    dots.replaceChildren();
+    if (total <= 1) {
+      dots.classList.add("hidden");
+      return;
+    }
+    dots.classList.remove("hidden");
+    for (let i = 0; i < total; i++) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "dot" + (i === photoSlide ? " on" : "");
+      b.addEventListener("click", () => {
+        const scroller = document.getElementById("photo-scroller");
+        scroller.scrollTo({ left: i * scroller.clientWidth, behavior: "smooth" });
+      });
+      dots.appendChild(b);
+    }
+  }
+
+  function openPhotoPicker(index) {
+    photoPick = index;
+    document.getElementById("fit-file").click();
+  }
+
+  function removePhoto(index) {
+    const slot = photos[index];
+    if (slot) forgetPreview(slot.preview);
+    photos.splice(index, 1);
+    if (photoSlide >= photos.length) photoSlide = Math.max(0, photos.length - 1);
+    paintPhotoScroller();
+  }
+
+  function paintPhotoScroller() {
+    bindPhotoScroller();
+    const scroller = document.getElementById("photo-scroller");
+    scroller.classList.toggle("story", mode === "story");
+    scroller.replaceChildren();
+    photos.forEach((p, i) => {
+      const slide = document.createElement("div");
+      slide.className = "photo-slide";
+      const img = document.createElement("img");
+      img.src = p.preview || p.url || "";
+      img.alt = "";
+      slide.appendChild(img);
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "photo-x";
+      x.setAttribute("aria-label", "Remove photo");
+      x.textContent = "X";
+      x.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        removePhoto(i);
+      });
+      slide.appendChild(x);
+      slide.addEventListener("click", () => openPhotoPicker(i));
+      scroller.appendChild(slide);
+    });
+    if (photos.length < photoCap()) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "photo-slide add";
+      add.innerHTML = `<div class="plus">+</div><span>${photos.length ? `Add ${photos.length + 1} / ${photoCap()}` : "Add photo"}</span>`;
+      add.addEventListener("click", () => openPhotoPicker(-1));
+      scroller.appendChild(add);
+    }
+    paintPhotoDots();
+    requestAnimationFrame(() => {
+      const w = scroller.clientWidth || 1;
+      scroller.scrollLeft = photoSlide * w;
+    });
+  }
+
   function openPost(post) {
     resetCompose();
     editingOutfit = post;
     const story = isStoryPost(post);
     mode = story ? "story" : "fit";
-    const src = post.image_url || post.imageUrl || "";
-    const drop = document.getElementById("fit-drop");
-    drop.classList.toggle("story", story);
+    const urls = photosFromOutfit(post);
+    photos = urls.map((href) => ({ blob: null, preview: href, url: href }));
+    photoSlide = 0;
     if (story) {
-      storyPreview = src;
       document.getElementById("photo-step").textContent = "Edit story · photo";
-      document.getElementById("photo-hint").textContent = "Tap to replace. Leave as-is to keep this photo.";
+      document.getElementById("photo-hint").textContent = "Tap photo to replace. Stories stay one frame.";
       document.getElementById("photo-next").textContent = "Save story";
-      document.getElementById("fit-label").textContent = "Tap to replace";
     } else {
-      fitPreview = src;
       cards = cardsFromItems(itemsByOutfit[post.id] || []);
-      document.getElementById("photo-step").textContent = "Edit fit check · photo";
-      document.getElementById("photo-hint").textContent = "Tap to replace. Next keeps cards you already posted.";
+      document.getElementById("photo-step").textContent = "Edit fit check · photos";
+      document.getElementById("photo-hint").textContent = "Swipe up to 3. Tap a frame to replace. Next keeps product cards.";
       document.getElementById("photo-next").textContent = "Next";
-      document.getElementById("fit-label").textContent = "Tap to replace";
     }
-    if (src) setDropPreview(drop, src);
+    paintPhotoScroller();
     showScreen("photo");
   }
 
@@ -788,40 +902,31 @@
 
   function resetCompose() {
     editingOutfit = null;
-    fitBlob = null;
-    storyBlob = null;
-    forgetPreview(fitPreview);
-    forgetPreview(storyPreview);
-    fitPreview = "";
-    storyPreview = "";
+    photos.forEach((p) => forgetPreview(p.preview));
+    photos = [];
+    photoSlide = 0;
+    photoPick = -1;
     cardIndex = 0;
     cards = emptyCards();
-    document.getElementById("fit-drop").querySelector("img")?.remove();
-    document.getElementById("fit-label").classList.remove("hidden");
-    document.getElementById("fit-label").textContent = "Add photo";
   }
 
   function goFit() {
     mode = "fit";
     resetCompose();
-    const drop = document.getElementById("fit-drop");
-    drop.classList.remove("story");
-    document.getElementById("photo-step").textContent = "Fit check · photo";
-    document.getElementById("photo-hint").textContent = "1080px minimum. Instagram HD. Soft photos are rejected.";
+    document.getElementById("photo-step").textContent = "Fit check · photos";
+    document.getElementById("photo-hint").textContent = "Up to 3. Swipe like Instagram. 1080px min.";
     document.getElementById("photo-next").textContent = "Next";
-    document.getElementById("fit-label").textContent = "Add photo";
+    paintPhotoScroller();
     showScreen("photo");
   }
 
   function goStory() {
     mode = "story";
     resetCompose();
-    const drop = document.getElementById("fit-drop");
-    drop.classList.add("story");
     document.getElementById("photo-step").textContent = "Story · photo";
-    document.getElementById("photo-hint").textContent = "1080px minimum. 9:16 like Instagram Stories.";
+    document.getElementById("photo-hint").textContent = "One frame. 1080px min. 9:16 like Instagram Stories.";
     document.getElementById("photo-next").textContent = "Post story";
-    document.getElementById("fit-label").textContent = "Add photo";
+    paintPhotoScroller();
     showScreen("photo");
   }
 
@@ -865,8 +970,17 @@
     card.listings = listingsFrom(document.getElementById("card-urls"));
   }
 
-  function existingPhoto() {
-    return editingOutfit?.image_url || editingOutfit?.imageUrl || "";
+  async function collectPhotoUrls(kind) {
+    const urls = [];
+    const folder = kind === "story" ? "stories" : "fits";
+    for (const slot of photos) {
+      if (slot.blob) {
+        urls.push(await uploadJpeg(`${folder}/${selected.id}/${crypto.randomUUID()}.jpg`, slot.blob));
+      } else if (slot.url && !String(slot.url).startsWith("blob:")) {
+        urls.push(slot.url);
+      }
+    }
+    return urls.slice(0, photoCap());
   }
 
   async function saveOutfitItems(outfitId) {
@@ -904,28 +1018,26 @@
     }
   }
 
-  async function publishOutfit(kind, blob) {
+  async function publishOutfit(kind) {
     if (!selected?.id) throw new Error("PICK A STAR FIRST.");
-    const prior = existingPhoto();
-    if (!blob && !prior) throw new Error("ADD AN HD PHOTO FIRST.");
     snack(editingOutfit ? "SAVING…" : "UPLOADING…");
-    let imageUrl = prior;
-    if (blob) {
-      const path = `${kind === "story" ? "stories" : "fits"}/${selected.id}/${crypto.randomUUID()}.jpg`;
-      imageUrl = await uploadJpeg(path, blob);
-    }
+    const urls = await collectPhotoUrls(kind);
+    if (!urls.length) throw new Error("ADD AN HD PHOTO FIRST.");
+    const imageUrl = urls[0];
+    const imageUrls = urls;
     if (editingOutfit?.id) {
-      if (blob) await patchLoose("outfits", editingOutfit.id, { image_url: imageUrl }, []);
+      await patchLoose("outfits", editingOutfit.id, { image_url: imageUrl, image_urls: imageUrls }, ["image_urls"]);
       if (kind === "fit") await saveOutfitItems(editingOutfit.id);
       return editingOutfit;
     }
     const outfit = await insertLoose("outfits", {
       artist_id: selected.id,
       image_url: imageUrl,
+      image_urls: imageUrls,
       title: kind === "story" ? "STORY" : "FIT CHECK",
       date: new Date().toISOString(),
       is_vault: false,
-    }, ["title", "date", "is_vault"]);
+    }, ["title", "date", "is_vault", "image_urls"]);
     if (kind === "fit") await saveOutfitItems(outfit.id);
     return outfit;
   }
@@ -1076,17 +1188,21 @@
     try {
       const kind = mode === "story" ? "story" : "fit";
       const blob = await pickHd(file, kind);
-      if (mode === "story") {
-        forgetPreview(storyPreview);
-        storyBlob = blob;
-        storyPreview = previewUrl(blob);
-        setDropPreview(document.getElementById("fit-drop"), storyPreview);
+      const href = previewUrl(blob);
+      if (photoPick >= 0 && photoPick < photos.length) {
+        forgetPreview(photos[photoPick].preview);
+        photos[photoPick] = { blob, preview: href, url: "" };
+        photoSlide = photoPick;
+      } else if (photos.length < photoCap()) {
+        photos.push({ blob, preview: href, url: "" });
+        photoSlide = photos.length - 1;
       } else {
-        forgetPreview(fitPreview);
-        fitBlob = blob;
-        fitPreview = previewUrl(blob);
-        setDropPreview(document.getElementById("fit-drop"), fitPreview);
+        snack(`MAX ${photoCap()} PHOTO${photoCap() === 1 ? "" : "S"}.`, true);
+        URL.revokeObjectURL(href);
+        return;
       }
+      photoPick = -1;
+      paintPhotoScroller();
     } catch (err) {
       snack(err.message || String(err), true);
     }
@@ -1096,7 +1212,7 @@
     if (mode === "story") {
       try {
         const wasEdit = Boolean(editingOutfit);
-        await publishOutfit("story", storyBlob);
+        await publishOutfit("story");
         snack(wasEdit ? "STORY SAVED. PULL TO REFRESH THE APP." : "STORY POSTED. PULL TO REFRESH THE APP.");
         resetCompose();
         showScreen("artist");
@@ -1106,7 +1222,7 @@
       }
       return;
     }
-    if (!fitBlob && !existingPhoto()) {
+    if (!photos.length) {
       snack("ADD AN HD FIT PHOTO FIRST.", true);
       return;
     }
@@ -1145,7 +1261,7 @@
 
   async function finishFitPublish() {
     const wasEdit = Boolean(editingOutfit);
-    await publishOutfit("fit", fitBlob);
+    await publishOutfit("fit");
     snack(wasEdit ? "FIT CHECK SAVED. PULL TO REFRESH THE APP." : "FIT CHECK POSTED. PULL TO REFRESH THE APP.");
     resetCompose();
     showScreen("artist");

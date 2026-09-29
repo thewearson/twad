@@ -8,6 +8,9 @@ ALTER TABLE public.artists
 ALTER TABLE public.items
   ADD COLUMN IF NOT EXISTS listings jsonb;
 
+ALTER TABLE public.outfits
+  ADD COLUMN IF NOT EXISTS image_urls jsonb;
+
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES (
   'image-artist',

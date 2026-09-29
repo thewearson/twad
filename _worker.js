@@ -258,7 +258,7 @@ async function uploadResponse(request, env) {
   if (!path) return json(400, { error: "Bad photo path." });
   const bytes = await request.arrayBuffer();
   if (!bytes.byteLength) return json(400, { error: "Empty photo." });
-  if (bytes.byteLength > 12 * 1024 * 1024) return json(400, { error: "Photo over 12MB." });
+  if (bytes.byteLength > 16 * 1024 * 1024) return json(400, { error: "Photo over 16MB." });
   const href = `${sbUrl(env)}/storage/v1/object/${PHOTO_BUCKET}/${path.split("/").map(encodeURIComponent).join("/")}`;
   const headers = {
     apikey: key,
@@ -296,6 +296,24 @@ async function restResponse(request, env) {
   const table = String(body.table || "");
   if (!WRITE_TABLES.has(table)) return json(400, { error: "Table not allowed." });
   const op = String(body.op || "");
+  if (op === "list") {
+    const filter = body.filter && typeof body.filter === "object" && !Array.isArray(body.filter) ? body.filter : {};
+    const clauses = ["select=*", "limit=100"];
+    if (filter.artist_id) {
+      clauses.push(`artist_id=eq.${encodeURIComponent(String(filter.artist_id))}`);
+    } else if (filter.outfit_id) {
+      clauses.push(`outfit_id=eq.${encodeURIComponent(String(filter.outfit_id))}`);
+    } else if (Array.isArray(filter.outfit_ids) && filter.outfit_ids.length) {
+      const ids = filter.outfit_ids.slice(0, 100).map((id) => encodeURIComponent(String(id))).join(",");
+      clauses.push(`outfit_id=in.(${ids})`);
+    } else {
+      return json(400, { error: "List needs a filter." });
+    }
+    const res = await sbFetch(env, `/rest/v1/${table}?${clauses.join("&")}`, { method: "GET" });
+    if (!res.ok) return json(res.status, { error: errText(res.data) || "List failed." });
+    const rowsOut = Array.isArray(res.data) ? res.data : [];
+    return json(200, { rows: rowsOut });
+  }
   if (op === "insert") {
     const row = body.row;
     if (!row || typeof row !== "object" || Array.isArray(row)) {

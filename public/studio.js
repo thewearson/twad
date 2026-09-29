@@ -56,9 +56,22 @@
   let cardIndex = 0;
   let cards = emptyCards();
   let snackTimer = 0;
+  let editingOutfit = null;
+  let artistPosts = [];
+  let itemsByOutfit = {};
 
   function emptyCard() {
-    return { brand: "", title: "", color: "", price: "", imageBlob: null, imagePreview: "", listings: [{ store: "", url: "", price: "" }] };
+    return {
+      id: "",
+      brand: "",
+      title: "",
+      color: "",
+      price: "",
+      imageBlob: null,
+      imagePreview: "",
+      imageUrl: "",
+      listings: [{ store: "", url: "", price: "" }],
+    };
   }
   function emptyCards() {
     return [emptyCard(), emptyCard(), emptyCard()];
@@ -298,7 +311,7 @@
     const h = img.naturalHeight || img.height;
     const short = Math.min(w, h);
     if (short < spec.minShort) {
-      throw new Error(`PHOTO TOO SMALL. ${w}×${h}. NEED ${spec.minShort}PX+ ON THE SHORT SIDE (INSTAGRAM HD).`);
+      throw new Error(`PHOTO TOO SMALL. ${w}×${h}. NEED ${spec.minShort}PX+ ON THE SHORT SIDE.`);
     }
     let sx = 0, sy = 0, sw = w, sh = h;
     if (spec.square) {
@@ -332,12 +345,31 @@
     pp: { minShort: 640, maxEdge: 1080, square: true, quality: 0.92 },
     fit: { minShort: 1080, maxEdge: 1440, square: false, quality: 0.92 },
     story: { minShort: 1080, maxEdge: 1920, square: false, quality: 0.92 },
-    item: { minShort: 800, maxEdge: 1440, square: false, quality: 0.92 },
+    item: { minShort: 700, maxEdge: 2200, square: false, quality: 0.96 },
   };
+
+  function isJpegFile(file) {
+    const type = (file.type || "").toLowerCase();
+    const name = file.name || "";
+    return type.includes("jpeg") || type.includes("jpg") || /\.jpe?g$/i.test(name);
+  }
 
   async function pickHd(file, kind) {
     const img = await loadImageFile(file);
-    return toJpeg(img, HD[kind]);
+    const spec = HD[kind];
+    if (kind === "item") {
+      const w = img.naturalWidth || img.width;
+      const h = img.naturalHeight || img.height;
+      const short = Math.min(w, h);
+      const long = Math.max(w, h);
+      if (short < spec.minShort) {
+        throw new Error(`PHOTO TOO SMALL. ${w}×${h}. NEED ${spec.minShort}PX+ ON THE SHORT SIDE.`);
+      }
+      if (isJpegFile(file) && long <= spec.maxEdge && file.size <= 8 * 1024 * 1024) {
+        return file;
+      }
+    }
+    return toJpeg(img, spec);
   }
 
   function previewUrl(blob) {
@@ -348,13 +380,37 @@
     const res = await fetch(`/api/upload?path=${encodeURIComponent(path)}`, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "content-type": "image/jpeg" },
+      headers: { "content-type": blob.type || "image/jpeg" },
       body: blob,
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || `UPLOAD ${res.status}`);
     if (!body.publicUrl) throw new Error("UPLOAD HAD NO URL.");
     return body.publicUrl;
+  }
+
+  function forgetPreview(href) {
+    if (href && String(href).startsWith("blob:")) URL.revokeObjectURL(href);
+  }
+
+  async function restList(tableName, filter) {
+    const out = await restWrite({ op: "list", table: tableName, filter });
+    return Array.isArray(out.rows) ? out.rows : [];
+  }
+
+  async function loadFiltered(tableName, filter) {
+    try {
+      return await restList(tableName, filter);
+    } catch {
+      let q = sb.from(tableName).select("*").limit(100);
+      if (filter.artist_id) q = q.eq("artist_id", filter.artist_id);
+      else if (filter.outfit_id) q = q.eq("outfit_id", filter.outfit_id);
+      else if (Array.isArray(filter.outfit_ids) && filter.outfit_ids.length) q = q.in("outfit_id", filter.outfit_ids);
+      else return [];
+      const { data, error } = await q;
+      if (error) throw error;
+      return Array.isArray(data) ? data : [];
+    }
   }
 
   async function restWrite(payload) {
@@ -539,19 +595,210 @@
     document.getElementById("artist-country").textContent = artist.country || "";
     paintAvatar(document.getElementById("artist-av"), artist, 96);
     showScreen("artist");
+    loadArtistPosts();
+  }
+
+  function postStamp(row) {
+    const raw = row.date || row.created_at || row.updated_at || "";
+    const t = Date.parse(raw);
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  function postWhen(row) {
+    const t = postStamp(row);
+    if (!t) return "";
+    const d = new Date(t);
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${d.getFullYear()}-${m}-${day}`;
+  }
+
+  function isStoryPost(row) {
+    return String(row.title || "").toUpperCase().includes("STORY");
+  }
+
+  function postKind(row) {
+    const vault = row.is_vault;
+    if (vault === true || vault === 1 || vault === "t" || vault === "1" || String(vault).toLowerCase() === "true") return "VAULT";
+    return isStoryPost(row) ? "STORY" : "FIT CHECK";
+  }
+
+  function formatItemPrice(raw) {
+    if (raw == null || raw === "") return "";
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return `$${n}`;
+    return String(raw);
+  }
+
+  function cardsFromItems(list) {
+    const next = emptyCards();
+    const rows = (list || []).slice().sort((a, b) => postStamp(a) - postStamp(b) || String(a.id).localeCompare(String(b.id)));
+    for (let i = 0; i < MAX_CARDS; i++) {
+      const it = rows[i];
+      if (!it) continue;
+      const listings = asListingArray(it.listings).map((l) => ({
+        store: l.store || l.name || "",
+        url: l.url || l.href || "",
+        price: l.price ? String(l.price) : "",
+      }));
+      const src = it.image_url || it.imageUrl || "";
+      next[i] = {
+        id: it.id || "",
+        brand: String(it.brand || "").toUpperCase(),
+        title: String(it.title || it.name || "").toUpperCase(),
+        color: String(it.color || "").toUpperCase(),
+        price: formatItemPrice(it.price),
+        imageBlob: null,
+        imagePreview: src,
+        imageUrl: src,
+        listings: listings.length ? listings : [{ store: "", url: "", price: "" }],
+      };
+    }
+    return next;
+  }
+
+  async function loadArtistPosts() {
+    const host = document.getElementById("artist-posts");
+    const msg = document.getElementById("posts-msg");
+    host.replaceChildren();
+    artistPosts = [];
+    itemsByOutfit = {};
+    if (!selected?.id) {
+      msg.textContent = "";
+      return;
+    }
+    msg.textContent = "LOADING…";
+    try {
+      const outfits = await loadFiltered("outfits", { artist_id: selected.id });
+      outfits.sort((a, b) => postStamp(b) - postStamp(a));
+      artistPosts = outfits;
+      const ids = outfits.map((o) => o.id).filter(Boolean);
+      if (ids.length) {
+        const items = await loadFiltered("items", { outfit_ids: ids });
+        for (const item of items) {
+          const oid = item.outfit_id || item.outfitId;
+          if (!oid) continue;
+          if (!itemsByOutfit[oid]) itemsByOutfit[oid] = [];
+          itemsByOutfit[oid].push(item);
+        }
+      }
+      renderArtistPosts();
+    } catch (err) {
+      msg.textContent = err.message || "POSTS FAILED.";
+    }
+  }
+
+  function renderArtistPosts() {
+    const host = document.getElementById("artist-posts");
+    const msg = document.getElementById("posts-msg");
+    host.replaceChildren();
+    if (!artistPosts.length) {
+      msg.textContent = "NO POSTS YET.";
+      return;
+    }
+    msg.textContent = `${artistPosts.length} POST(S).`;
+    artistPosts.forEach((post) => {
+      const row = document.createElement("div");
+      row.className = "post-row";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "post" + (isStoryPost(post) ? " story" : "");
+      const thumb = document.createElement("div");
+      thumb.className = "thumb";
+      const src = post.image_url || post.imageUrl || "";
+      if (src) {
+        const img = document.createElement("img");
+        img.src = src;
+        img.alt = "";
+        thumb.appendChild(img);
+      }
+      const meta = document.createElement("div");
+      const kind = document.createElement("div");
+      kind.className = "kind";
+      kind.textContent = postKind(post);
+      const when = document.createElement("div");
+      when.className = "when";
+      when.textContent = postWhen(post);
+      const n = document.createElement("div");
+      n.className = "n";
+      const count = (itemsByOutfit[post.id] || []).length;
+      n.textContent = isStoryPost(post) ? "STORY" : `${count} CARD${count === 1 ? "" : "S"}`;
+      meta.append(kind, when, n);
+      const edit = document.createElement("span");
+      edit.className = "edit";
+      edit.textContent = "Edit";
+      btn.append(thumb, meta, edit);
+      btn.addEventListener("click", () => openPost(post));
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "post-del";
+      del.setAttribute("aria-label", "Delete post");
+      del.textContent = "X";
+      del.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        deletePost(post);
+      });
+      row.append(btn, del);
+      host.appendChild(row);
+    });
+  }
+
+  function openPost(post) {
+    resetCompose();
+    editingOutfit = post;
+    const story = isStoryPost(post);
+    mode = story ? "story" : "fit";
+    const src = post.image_url || post.imageUrl || "";
+    const drop = document.getElementById("fit-drop");
+    drop.classList.toggle("story", story);
+    if (story) {
+      storyPreview = src;
+      document.getElementById("photo-step").textContent = "Edit story · photo";
+      document.getElementById("photo-hint").textContent = "Tap to replace. Leave as-is to keep this photo.";
+      document.getElementById("photo-next").textContent = "Save story";
+      document.getElementById("fit-label").textContent = "Tap to replace";
+    } else {
+      fitPreview = src;
+      cards = cardsFromItems(itemsByOutfit[post.id] || []);
+      document.getElementById("photo-step").textContent = "Edit fit check · photo";
+      document.getElementById("photo-hint").textContent = "Tap to replace. Next keeps cards you already posted.";
+      document.getElementById("photo-next").textContent = "Next";
+      document.getElementById("fit-label").textContent = "Tap to replace";
+    }
+    if (src) setDropPreview(drop, src);
+    showScreen("photo");
+  }
+
+  async function deletePost(post) {
+    if (!post?.id) return;
+    if (!window.confirm("DELETE THIS POST AND ITS PRODUCT CARDS?")) return;
+    snack("DELETING…");
+    try {
+      const items = itemsByOutfit[post.id] || [];
+      for (const item of items) {
+        if (item.id) await restWrite({ op: "delete", table: "items", id: item.id });
+      }
+      await restWrite({ op: "delete", table: "outfits", id: post.id });
+      snack("POST DELETED.");
+      await loadArtistPosts();
+    } catch (err) {
+      snack(err.message || String(err), true);
+    }
   }
 
   function resetCompose() {
+    editingOutfit = null;
     fitBlob = null;
     storyBlob = null;
-    if (fitPreview) URL.revokeObjectURL(fitPreview);
-    if (storyPreview) URL.revokeObjectURL(storyPreview);
+    forgetPreview(fitPreview);
+    forgetPreview(storyPreview);
     fitPreview = "";
     storyPreview = "";
     cardIndex = 0;
     cards = emptyCards();
     document.getElementById("fit-drop").querySelector("img")?.remove();
     document.getElementById("fit-label").classList.remove("hidden");
+    document.getElementById("fit-label").textContent = "Add photo";
   }
 
   function goFit() {
@@ -562,6 +809,7 @@
     document.getElementById("photo-step").textContent = "Fit check · photo";
     document.getElementById("photo-hint").textContent = "1080px minimum. Instagram HD. Soft photos are rejected.";
     document.getElementById("photo-next").textContent = "Next";
+    document.getElementById("fit-label").textContent = "Add photo";
     showScreen("photo");
   }
 
@@ -573,6 +821,7 @@
     document.getElementById("photo-step").textContent = "Story · photo";
     document.getElementById("photo-hint").textContent = "1080px minimum. 9:16 like Instagram Stories.";
     document.getElementById("photo-next").textContent = "Post story";
+    document.getElementById("fit-label").textContent = "Add photo";
     showScreen("photo");
   }
 
@@ -601,7 +850,10 @@
       ph.appendChild(img);
     }
     fillListings(document.getElementById("card-urls"), card.listings);
-    document.getElementById("card-next").textContent = cardIndex === MAX_CARDS - 1 ? "Post fit check" : "Next card";
+    const last = cardIndex === MAX_CARDS - 1;
+    document.getElementById("card-next").textContent = last
+      ? (editingOutfit ? "Save fit check" : "Post fit check")
+      : "Next card";
   }
 
   function captureCardForm() {
@@ -613,12 +865,60 @@
     card.listings = listingsFrom(document.getElementById("card-urls"));
   }
 
+  function existingPhoto() {
+    return editingOutfit?.image_url || editingOutfit?.imageUrl || "";
+  }
+
+  async function saveOutfitItems(outfitId) {
+    for (let i = 0; i < cards.length; i++) {
+      const card = cards[i];
+      if (!card.brand && !card.title) {
+        if (card.id) await restWrite({ op: "delete", table: "items", id: card.id });
+        continue;
+      }
+      let itemUrl = card.imageUrl || "";
+      if (card.imageBlob) {
+        itemUrl = await uploadJpeg(`items/${outfitId}/${i + 1}-${crypto.randomUUID().slice(0, 6)}.jpg`, card.imageBlob);
+      }
+      const listings = (card.listings || []).filter((r) => r.url);
+      const row = {
+        outfit_id: outfitId,
+        artist_id: selected.id,
+        title: card.title || "ITEM",
+        name: card.title || "ITEM",
+        brand: card.brand || "BRAND",
+        color: card.color || null,
+        price: parsePrice(card.price),
+        image_url: itemUrl || null,
+        purchase_url: listings[0]?.url || null,
+        listings,
+      };
+      const optional = ["artist_id", "color", "price", "image_url", "purchase_url", "listings", "title", "name"];
+      if (card.id) {
+        const patch = { ...row };
+        delete patch.outfit_id;
+        await patchLoose("items", card.id, patch, optional);
+      } else {
+        await insertLoose("items", row, optional);
+      }
+    }
+  }
+
   async function publishOutfit(kind, blob) {
     if (!selected?.id) throw new Error("PICK A STAR FIRST.");
-    if (!blob) throw new Error("ADD AN HD PHOTO FIRST.");
-    snack("UPLOADING…");
-    const path = `${kind === "story" ? "stories" : "fits"}/${selected.id}/${crypto.randomUUID()}.jpg`;
-    const imageUrl = await uploadJpeg(path, blob);
+    const prior = existingPhoto();
+    if (!blob && !prior) throw new Error("ADD AN HD PHOTO FIRST.");
+    snack(editingOutfit ? "SAVING…" : "UPLOADING…");
+    let imageUrl = prior;
+    if (blob) {
+      const path = `${kind === "story" ? "stories" : "fits"}/${selected.id}/${crypto.randomUUID()}.jpg`;
+      imageUrl = await uploadJpeg(path, blob);
+    }
+    if (editingOutfit?.id) {
+      if (blob) await patchLoose("outfits", editingOutfit.id, { image_url: imageUrl }, []);
+      if (kind === "fit") await saveOutfitItems(editingOutfit.id);
+      return editingOutfit;
+    }
     const outfit = await insertLoose("outfits", {
       artist_id: selected.id,
       image_url: imageUrl,
@@ -626,29 +926,7 @@
       date: new Date().toISOString(),
       is_vault: false,
     }, ["title", "date", "is_vault"]);
-    if (kind === "fit") {
-      for (let i = 0; i < cards.length; i++) {
-        const card = cards[i];
-        if (!card.brand && !card.title) continue;
-        let itemUrl = "";
-        if (card.imageBlob) {
-          itemUrl = await uploadJpeg(`items/${outfit.id}/${i + 1}.jpg`, card.imageBlob);
-        }
-        const listings = card.listings.filter((r) => r.url);
-        await insertLoose("items", {
-          outfit_id: outfit.id,
-          artist_id: selected.id,
-          title: card.title || "ITEM",
-          name: card.title || "ITEM",
-          brand: card.brand || "BRAND",
-          color: card.color || null,
-          price: parsePrice(card.price),
-          image_url: itemUrl || null,
-          purchase_url: listings[0]?.url || null,
-          listings,
-        }, ["artist_id", "color", "price", "image_url", "purchase_url", "listings", "title", "name"]);
-      }
-    }
+    if (kind === "fit") await saveOutfitItems(outfit.id);
     return outfit;
   }
 
@@ -692,12 +970,12 @@
     showScreen("star");
   }
 
-  async function patchLoose(id, payload, optionalKeys) {
+  async function patchLoose(tableName, id, payload, optionalKeys) {
     let patch = { ...payload };
-    let keys = optionalKeys.slice();
+    let keys = (optionalKeys || []).slice();
     for (;;) {
       try {
-        await restWrite({ op: "update", table: "artists", id, patch });
+        await restWrite({ op: "update", table: tableName, id, patch });
         return;
       } catch (error) {
         const msg = error.message || "";
@@ -734,7 +1012,7 @@
       if (editingId) {
         const patch = { name, country, region, instagram };
         if (imageUrl) patch.image_url = imageUrl;
-        await patchLoose(editingId, patch, ["instagram", "region"]);
+        await patchLoose("artists", editingId, patch, ["instagram", "region"]);
         snack("STAR UPDATED.");
         const id = editingId;
         await loadArtists();
@@ -799,12 +1077,12 @@
       const kind = mode === "story" ? "story" : "fit";
       const blob = await pickHd(file, kind);
       if (mode === "story") {
-        if (storyPreview) URL.revokeObjectURL(storyPreview);
+        forgetPreview(storyPreview);
         storyBlob = blob;
         storyPreview = previewUrl(blob);
         setDropPreview(document.getElementById("fit-drop"), storyPreview);
       } else {
-        if (fitPreview) URL.revokeObjectURL(fitPreview);
+        forgetPreview(fitPreview);
         fitBlob = blob;
         fitPreview = previewUrl(blob);
         setDropPreview(document.getElementById("fit-drop"), fitPreview);
@@ -817,15 +1095,18 @@
   document.getElementById("photo-next").addEventListener("click", async () => {
     if (mode === "story") {
       try {
+        const wasEdit = Boolean(editingOutfit);
         await publishOutfit("story", storyBlob);
-        snack("STORY POSTED. PULL TO REFRESH THE APP.");
+        snack(wasEdit ? "STORY SAVED. PULL TO REFRESH THE APP." : "STORY POSTED. PULL TO REFRESH THE APP.");
+        resetCompose();
         showScreen("artist");
+        await loadArtistPosts();
       } catch (err) {
         snack(err.message || String(err), true);
       }
       return;
     }
-    if (!fitBlob) {
+    if (!fitBlob && !existingPhoto()) {
       snack("ADD AN HD FIT PHOTO FIRST.", true);
       return;
     }
@@ -852,14 +1133,24 @@
     try {
       const blob = await pickHd(file, "item");
       const card = cards[cardIndex];
-      if (card.imagePreview) URL.revokeObjectURL(card.imagePreview);
+      if (card.imagePreview) forgetPreview(card.imagePreview);
       card.imageBlob = blob;
       card.imagePreview = previewUrl(blob);
+      card.imageUrl = "";
       paintCardForm();
     } catch (err) {
       snack(err.message || String(err), true);
     }
   });
+
+  async function finishFitPublish() {
+    const wasEdit = Boolean(editingOutfit);
+    await publishOutfit("fit", fitBlob);
+    snack(wasEdit ? "FIT CHECK SAVED. PULL TO REFRESH THE APP." : "FIT CHECK POSTED. PULL TO REFRESH THE APP.");
+    resetCompose();
+    showScreen("artist");
+    await loadArtistPosts();
+  }
 
   document.getElementById("card-next").addEventListener("click", async () => {
     captureCardForm();
@@ -869,25 +1160,25 @@
       return;
     }
     try {
-      await publishOutfit("fit", fitBlob);
-      snack("FIT CHECK POSTED. PULL TO REFRESH THE APP.");
-      showScreen("artist");
+      await finishFitPublish();
     } catch (err) {
       snack(err.message || String(err), true);
     }
   });
 
   document.getElementById("card-skip").addEventListener("click", async () => {
+    const card = cards[cardIndex];
+    forgetPreview(card.imagePreview);
+    const keepId = card.id;
     cards[cardIndex] = emptyCard();
+    cards[cardIndex].id = keepId;
     if (cardIndex < MAX_CARDS - 1) {
       cardIndex += 1;
       paintCardForm();
       return;
     }
     try {
-      await publishOutfit("fit", fitBlob);
-      snack("FIT CHECK POSTED. PULL TO REFRESH THE APP.");
-      showScreen("artist");
+      await finishFitPublish();
     } catch (err) {
       snack(err.message || String(err), true);
     }
@@ -909,6 +1200,7 @@
       return;
     }
     if (screen === "photo") {
+      resetCompose();
       showScreen(selected ? "artist" : "pick");
       return;
     }

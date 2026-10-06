@@ -214,14 +214,18 @@
         <p class="step" style="margin-top:28px">Product plate</p>
         <p class="hint">Same ink-stroke box as the archive card. If the product is out, paste the buy URL — the app opens it. If it has not dropped, write where it lands. No dead button.</p>
         <div class="news-plate" id="news-plate">
-          <div class="news-plate-row"><span>NAME</span><b id="news-live-name">—</b></div>
-          <div class="news-plate-row"><span>RELEASE DATE</span><b id="news-live-date">—</b></div>
-          <div class="news-plate-row"><span>BUY</span><div class="news-buy" id="news-live-buy">—</div></div>
-          <div class="news-plate-row"><span>SKU</span><b id="news-live-sku">—</b></div>
+          <div class="news-plate-row"><span>NAME :</span><b id="news-live-name">—</b></div>
+          <div class="news-plate-row"><span>SKU :</span><b id="news-live-sku">—</b></div>
+          <div class="news-plate-row"><span>RELEASE DATE :</span><b id="news-live-date">—</b></div>
+          <div class="news-plate-row"><span>BUY :</span><div class="news-buy" id="news-live-buy">—</div></div>
         </div>
         <div class="field">
           <label for="news-pname">Name</label>
           <input id="news-pname" placeholder="OPIUM CONTRAST STITCH JACKET">
+        </div>
+        <div class="field">
+          <label for="news-sku">SKU</label>
+          <input id="news-sku" placeholder="SKU">
         </div>
         <div class="field">
           <label for="news-pdate">Release date</label>
@@ -234,10 +238,6 @@
         <div class="field">
           <label for="news-pnote">Where it drops · if it is not out</label>
           <input id="news-pnote" placeholder="COMPLEXCON LAS VEGAS · OCT 3 + 4">
-        </div>
-        <div class="field">
-          <label for="news-sku">SKU</label>
-          <input id="news-sku" placeholder="SKU">
         </div>
         <button type="button" class="btn ink" id="news-save">Publish dispatch</button>
         <p id="news-edit-msg" class="muted"></p>

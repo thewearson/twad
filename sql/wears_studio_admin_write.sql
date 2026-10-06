@@ -24,7 +24,7 @@ DO $$
 DECLARE
   t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['artists', 'outfits', 'items', 'archives']
+  FOREACH t IN ARRAY ARRAY['artists', 'outfits', 'items', 'archives', 'drip_news']
   LOOP
     IF to_regclass('public.' || t) IS NULL THEN
       CONTINUE;

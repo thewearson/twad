@@ -1,8 +1,8 @@
 (() => {
   const url = window.WEARS_SUPABASE_URL;
   const key = window.WEARS_SUPABASE_ANON_KEY;
-  const preferred = ["artists", "outfits", "items", "archives"];
-  const fallbackTables = ["artists", "outfits", "items", "archives", "comments"];
+  const preferred = ["artists", "outfits", "items", "archives", "drip_news"];
+  const fallbackTables = ["artists", "outfits", "items", "archives", "drip_news", "comments"];
   const REGIONS = ["ALL", "USA", "TR", "EU", "CANADA", "ASIA", "AFRICA"];
   const COUNTRIES = [
     "UNITED STATES", "CANADA", "TÜRKİYE", "UNITED KINGDOM", "FRANCE", "GERMANY",
@@ -11,6 +11,12 @@
   ];
   const MAX_CARDS = 3;
   const MAX_PHOTOS = 3;
+  const MAX_NEWS_PHOTOS = 5;
+  const NEWS_CATS = ["CULTURE", "RELEASE", "ARCHIVE", "STREET", "MUSIC & FIT"];
+  const NEWS_OPTIONAL = [
+    "dek", "body", "source", "image_urls",
+    "product_name", "release_date", "buy_url", "buy_note", "sku", "category",
+  ];
   const AVAIL = [
     { id: "in_stock", label: "IN STOCK" },
     { id: "sold_out", label: "SOLD OUT" },
@@ -66,6 +72,13 @@
   let editingOutfit = null;
   let artistPosts = [];
   let itemsByOutfit = {};
+  let newsRows = [];
+  let editingNews = null;
+  let newsPhotos = [];
+  let newsSlide = 0;
+  let newsPick = -1;
+  let newsScrollerBound = false;
+  let newsCat = "CULTURE";
 
   function emptyCard() {
     return {
@@ -354,12 +367,21 @@
     fit: { minShort: 1080, maxEdge: 2560, square: false, quality: 0.96 },
     story: { minShort: 1080, maxEdge: 2560, square: false, quality: 0.96 },
     item: { minShort: 700, maxEdge: 2200, square: false, quality: 0.96 },
+    news: { minShort: 1080, maxEdge: 4096, square: false, quality: 0.97, maxBytes: 12 * 1024 * 1024 },
   };
 
-  function isJpegFile(file) {
+  function isRasterFile(file) {
     const type = (file.type || "").toLowerCase();
     const name = file.name || "";
-    return type.includes("jpeg") || type.includes("jpg") || /\.jpe?g$/i.test(name);
+    return type.includes("jpeg") || type.includes("jpg") || type.includes("png") || type.includes("webp")
+      || /\.(jpe?g|png|webp)$/i.test(name);
+  }
+
+  function photoExt(blob) {
+    const t = (blob.type || "").toLowerCase();
+    if (t.includes("png")) return "png";
+    if (t.includes("webp")) return "webp";
+    return "jpg";
   }
 
   async function pickHd(file, kind) {
@@ -372,7 +394,8 @@
     if (short < spec.minShort) {
       throw new Error(`PHOTO TOO SMALL. ${w}×${h}. NEED ${spec.minShort}PX+ ON THE SHORT SIDE.`);
     }
-    if (!spec.square && isJpegFile(file) && long <= spec.maxEdge && file.size <= 8 * 1024 * 1024) {
+    const maxBytes = spec.maxBytes || 8 * 1024 * 1024;
+    if (!spec.square && isRasterFile(file) && long <= spec.maxEdge && file.size <= maxBytes) {
       return file;
     }
     return toJpeg(img, spec);
@@ -1044,7 +1067,7 @@
     const folder = kind === "story" ? "stories" : "fits";
     for (const slot of photos) {
       if (slot.blob) {
-        urls.push(await uploadJpeg(`${folder}/${selected.id}/${crypto.randomUUID()}.jpg`, slot.blob));
+        urls.push(await uploadJpeg(`${folder}/${selected.id}/${crypto.randomUUID()}.${photoExt(slot.blob)}`, slot.blob));
       } else if (slot.url && !String(slot.url).startsWith("blob:")) {
         urls.push(slot.url);
       }
@@ -1061,7 +1084,7 @@
       }
       let itemUrl = card.imageUrl || "";
       if (card.imageBlob) {
-        itemUrl = await uploadJpeg(`items/${outfitId}/${i + 1}-${crypto.randomUUID().slice(0, 6)}.jpg`, card.imageBlob);
+        itemUrl = await uploadJpeg(`items/${outfitId}/${i + 1}-${crypto.randomUUID().slice(0, 6)}.${photoExt(card.imageBlob)}`, card.imageBlob);
       }
       const listings = stampAvailability(
         (card.listings || []).filter((r) => r.url),
@@ -1374,6 +1397,369 @@
     }
   });
 
+  function newsUrlList(row) {
+    const raw = row?.image_urls ?? row?.imageUrls ?? row?.image_url ?? row?.imageUrl;
+    const out = [];
+    const add = (v) => {
+      if (v == null) return;
+      if (Array.isArray(v)) {
+        v.forEach(add);
+        return;
+      }
+      const s = String(v).trim();
+      if (!s || s === "null" || out.includes(s) || out.length >= MAX_NEWS_PHOTOS) return;
+      out.push(s);
+    };
+    add(raw);
+    return out;
+  }
+
+  function newsWhen(row) {
+    const raw = row?.created_at || row?.createdAt;
+    if (!raw) return "";
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return "";
+    const mins = Math.max(0, Math.round((Date.now() - d.getTime()) / 60000));
+    if (mins < 2) return "JUST NOW";
+    if (mins < 60) return `${mins} MINS AGO`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs} HOUR${hrs === 1 ? "" : "S"} AGO`;
+    const days = Math.round(hrs / 24);
+    return `${days} DAY${days === 1 ? "" : "S"} AGO`;
+  }
+
+  function resetNewsCompose() {
+    editingNews = null;
+    newsPhotos.forEach((p) => forgetPreview(p.preview));
+    newsPhotos = [];
+    newsSlide = 0;
+    newsPick = -1;
+    newsCat = "CULTURE";
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.value = v;
+    };
+    set("news-title", "");
+    set("news-dek", "");
+    set("news-body", "");
+    set("news-source", "THE WEARS EDITORIAL");
+    set("news-pname", "");
+    set("news-pdate", "");
+    set("news-purl", "");
+    set("news-pnote", "");
+    set("news-sku", "");
+    document.getElementById("news-step").textContent = "New dispatch";
+    document.getElementById("news-save").textContent = "Publish dispatch";
+    document.getElementById("news-edit-msg").textContent = "";
+    paintNewsCats();
+    paintNewsScroller();
+    paintNewsPlate();
+  }
+
+  function bindNewsScroller() {
+    if (newsScrollerBound) return;
+    newsScrollerBound = true;
+    const scroller = document.getElementById("news-scroller");
+    scroller.addEventListener("scroll", () => {
+      const w = scroller.clientWidth || 1;
+      newsSlide = Math.round(scroller.scrollLeft / w);
+      paintNewsDots();
+    }, { passive: true });
+  }
+
+  function paintNewsDots() {
+    const dots = document.getElementById("news-dots");
+    const total = newsPhotos.length < MAX_NEWS_PHOTOS ? newsPhotos.length + 1 : Math.max(newsPhotos.length, 1);
+    dots.replaceChildren();
+    if (total <= 1) {
+      dots.classList.add("hidden");
+      return;
+    }
+    dots.classList.remove("hidden");
+    for (let i = 0; i < total; i++) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "dot" + (i === newsSlide ? " on" : "");
+      b.addEventListener("click", () => {
+        const scroller = document.getElementById("news-scroller");
+        scroller.scrollTo({ left: i * scroller.clientWidth, behavior: "smooth" });
+      });
+      dots.appendChild(b);
+    }
+  }
+
+  function openNewsPicker(index) {
+    newsPick = index;
+    document.getElementById("news-file").click();
+  }
+
+  function removeNewsPhoto(index) {
+    const slot = newsPhotos[index];
+    if (slot) forgetPreview(slot.preview);
+    newsPhotos.splice(index, 1);
+    if (newsSlide >= newsPhotos.length) newsSlide = Math.max(0, newsPhotos.length - 1);
+    paintNewsScroller();
+  }
+
+  function paintNewsScroller() {
+    bindNewsScroller();
+    const scroller = document.getElementById("news-scroller");
+    scroller.replaceChildren();
+    newsPhotos.forEach((p, i) => {
+      const slide = document.createElement("div");
+      slide.className = "photo-slide";
+      const img = document.createElement("img");
+      img.src = p.preview || p.url || "";
+      img.alt = "";
+      slide.appendChild(img);
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "photo-x";
+      x.setAttribute("aria-label", "Remove photo");
+      x.textContent = "X";
+      x.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        removeNewsPhoto(i);
+      });
+      slide.appendChild(x);
+      slide.addEventListener("click", () => openNewsPicker(i));
+      scroller.appendChild(slide);
+    });
+    if (newsPhotos.length < MAX_NEWS_PHOTOS) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "photo-slide add";
+      add.innerHTML = `<div class="plus">+</div><span>${newsPhotos.length ? `Add ${newsPhotos.length + 1} / ${MAX_NEWS_PHOTOS}` : "Add photo"}</span>`;
+      add.addEventListener("click", () => openNewsPicker(-1));
+      scroller.appendChild(add);
+    }
+    paintNewsDots();
+    requestAnimationFrame(() => {
+      const w = scroller.clientWidth || 1;
+      scroller.scrollLeft = newsSlide * w;
+    });
+  }
+
+  function paintNewsCats() {
+    const host = document.getElementById("news-cats");
+    host.replaceChildren();
+    NEWS_CATS.forEach((cat) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip" + (cat === newsCat ? " on" : "");
+      b.textContent = cat;
+      b.addEventListener("click", () => {
+        newsCat = cat;
+        paintNewsCats();
+      });
+      host.appendChild(b);
+    });
+  }
+
+  function buyLabel(href) {
+    let s = String(href || "").trim();
+    s = s.replace(/^https?:\/\//i, "");
+    if (s.endsWith("/")) s = s.slice(0, -1);
+    return s;
+  }
+
+  function paintNewsPlate() {
+    const name = document.getElementById("news-pname").value.trim() || "—";
+    const date = document.getElementById("news-pdate").value.trim() || "—";
+    const href = document.getElementById("news-purl").value.trim();
+    const note = document.getElementById("news-pnote").value.trim();
+    const sku = document.getElementById("news-sku").value.trim() || "—";
+    document.getElementById("news-live-name").textContent = name;
+    document.getElementById("news-live-date").textContent = date;
+    document.getElementById("news-live-sku").textContent = sku;
+    const buy = document.getElementById("news-live-buy");
+    if (href) {
+      buy.textContent = buyLabel(href);
+      buy.classList.remove("note");
+    } else if (note) {
+      buy.textContent = note;
+      buy.classList.add("note");
+    } else {
+      buy.textContent = "—";
+      buy.classList.add("note");
+    }
+  }
+
+  async function loadNews() {
+    const msg = document.getElementById("news-msg");
+    msg.textContent = "LOADING…";
+    try {
+      newsRows = await restList("drip_news", {});
+    } catch (err) {
+      try {
+        const { data, error } = await sb.from("drip_news").select("*").order("created_at", { ascending: false }).limit(100);
+        if (error) throw error;
+        newsRows = Array.isArray(data) ? data : [];
+      } catch (e) {
+        newsRows = [];
+        msg.textContent = e.message || String(e);
+        paintNewsList();
+        return;
+      }
+    }
+    newsRows.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    msg.textContent = newsRows.length ? `${newsRows.length} DISPATCH${newsRows.length === 1 ? "" : "ES"}.` : "NO DISPATCHES.";
+    paintNewsList();
+  }
+
+  function paintNewsList() {
+    const host = document.getElementById("news-list");
+    host.replaceChildren();
+    newsRows.forEach((row) => {
+      const wrap = document.createElement("div");
+      wrap.className = "post-row";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "post";
+      const urls = newsUrlList(row);
+      const thumb = document.createElement("div");
+      thumb.className = "thumb";
+      if (urls[0]) {
+        const img = document.createElement("img");
+        img.src = urls[0];
+        img.alt = "";
+        thumb.appendChild(img);
+      }
+      const mid = document.createElement("div");
+      const kind = document.createElement("div");
+      kind.className = "kind";
+      kind.textContent = row.category || "CULTURE";
+      const when = document.createElement("div");
+      when.className = "when";
+      when.textContent = (row.title || "UNTITLED").toString().slice(0, 72);
+      const n = document.createElement("div");
+      n.className = "n";
+      n.textContent = newsWhen(row);
+      mid.append(kind, when, n);
+      btn.append(thumb, mid);
+      btn.addEventListener("click", () => openNewsEdit(row));
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "post-del";
+      del.setAttribute("aria-label", "Delete dispatch");
+      del.textContent = "X";
+      del.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        deleteNews(row);
+      });
+      wrap.append(btn, del);
+      host.appendChild(wrap);
+    });
+  }
+
+  function openNewsEdit(row) {
+    resetNewsCompose();
+    if (row) {
+      editingNews = row;
+      newsCat = String(row.category || "CULTURE").toUpperCase();
+      if (!NEWS_CATS.includes(newsCat)) NEWS_CATS.push(newsCat);
+      document.getElementById("news-title").value = row.title || "";
+      document.getElementById("news-dek").value = row.dek || "";
+      document.getElementById("news-body").value = row.body || "";
+      document.getElementById("news-source").value = row.source || "THE WEARS EDITORIAL";
+      document.getElementById("news-pname").value = row.product_name || "";
+      document.getElementById("news-pdate").value = row.release_date || "";
+      document.getElementById("news-purl").value = row.buy_url || "";
+      document.getElementById("news-pnote").value = row.buy_note || "";
+      document.getElementById("news-sku").value = row.sku || "";
+      newsPhotos = newsUrlList(row).map((href) => ({ blob: null, preview: href, url: href }));
+      document.getElementById("news-step").textContent = "Edit dispatch";
+      document.getElementById("news-save").textContent = "Save dispatch";
+    }
+    paintNewsCats();
+    paintNewsScroller();
+    paintNewsPlate();
+    showScreen("news-edit");
+    requestAnimationFrame(paintNewsScroller);
+  }
+
+  async function collectNewsUrls() {
+    const urls = [];
+    for (const slot of newsPhotos) {
+      if (slot.blob) {
+        urls.push(await uploadJpeg(`news/${crypto.randomUUID()}.${photoExt(slot.blob)}`, slot.blob));
+      } else if (slot.url && !String(slot.url).startsWith("blob:")) {
+        urls.push(slot.url);
+      }
+    }
+    return urls.slice(0, MAX_NEWS_PHOTOS);
+  }
+
+  async function saveNews() {
+    const title = document.getElementById("news-title").value.trim();
+    const dek = document.getElementById("news-dek").value.trim();
+    const body = document.getElementById("news-body").value.trim();
+    const source = document.getElementById("news-source").value.trim() || "THE WEARS EDITORIAL";
+    const productName = document.getElementById("news-pname").value.trim();
+    const releaseDate = document.getElementById("news-pdate").value.trim();
+    const buyUrl = document.getElementById("news-purl").value.trim();
+    const buyNote = document.getElementById("news-pnote").value.trim();
+    const sku = document.getElementById("news-sku").value.trim();
+    const msg = document.getElementById("news-edit-msg");
+    if (!title) {
+      snack("TITLE REQUIRED.", true);
+      return;
+    }
+    if (!newsPhotos.length) {
+      snack("ADD AN HD PHOTO FIRST.", true);
+      return;
+    }
+    msg.textContent = "SAVING…";
+    try {
+      const imageUrls = await collectNewsUrls();
+      const row = {
+        category: newsCat,
+        title,
+        dek,
+        body,
+        source,
+        image_urls: imageUrls,
+        product_name: productName,
+        release_date: releaseDate,
+        buy_url: buyUrl,
+        buy_note: buyNote,
+        sku,
+      };
+      if (editingNews?.id) {
+        await restWrite({ op: "update", table: "drip_news", id: editingNews.id, patch: row });
+        snack("DISPATCH SAVED. PULL TO REFRESH THE APP.");
+      } else {
+        await insertLoose("drip_news", row, NEWS_OPTIONAL);
+        snack("DISPATCH POSTED. PULL TO REFRESH THE APP.");
+      }
+      resetNewsCompose();
+      showScreen("news");
+      await loadNews();
+    } catch (err) {
+      const text = err.message || String(err);
+      msg.textContent = text;
+      snack(text.includes("drip_news") ? `${text}\nNazım SQL: sql/wears_drip_news.sql` : text, true);
+    }
+  }
+
+  async function deleteNews(row) {
+    if (!row?.id) return;
+    if (!window.confirm("DELETE THIS DISPATCH?")) return;
+    try {
+      await restWrite({ op: "delete", table: "drip_news", id: row.id });
+      snack("DISPATCH DELETED.");
+      await loadNews();
+    } catch (err) {
+      snack(err.message || String(err), true);
+    }
+  }
+
+  async function openNewsDesk() {
+    showScreen("news");
+    await loadNews();
+  }
+
   backBtn.addEventListener("click", () => {
     if (screen === "card") {
       captureCardForm();
@@ -1394,6 +1780,14 @@
       showScreen(selected ? "artist" : "pick");
       return;
     }
+    if (screen === "news-edit") {
+      showScreen("news");
+      return;
+    }
+    if (screen === "news") {
+      showScreen("pick");
+      return;
+    }
     if (screen === "artist") showScreen("pick");
   });
 
@@ -1402,6 +1796,37 @@
     const names = await listTables();
     renderTables(names);
     await openTable(names.includes("artists") ? "artists" : names[0]);
+  });
+  document.getElementById("open-news").addEventListener("click", () => openNewsDesk());
+  document.getElementById("news-add").addEventListener("click", () => openNewsEdit(null));
+  document.getElementById("news-save").addEventListener("click", saveNews);
+  document.getElementById("news-file").addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const blob = await pickHd(file, "news");
+      const href = previewUrl(blob);
+      if (newsPick >= 0 && newsPick < newsPhotos.length) {
+        forgetPreview(newsPhotos[newsPick].preview);
+        newsPhotos[newsPick] = { blob, preview: href, url: "" };
+        newsSlide = newsPick;
+      } else if (newsPhotos.length < MAX_NEWS_PHOTOS) {
+        newsPhotos.push({ blob, preview: href, url: "" });
+        newsSlide = newsPhotos.length - 1;
+      } else {
+        snack(`MAX ${MAX_NEWS_PHOTOS} PHOTOS.`, true);
+        URL.revokeObjectURL(href);
+        return;
+      }
+      newsPick = -1;
+      paintNewsScroller();
+    } catch (err) {
+      snack(err.message || String(err), true);
+    }
+  });
+  ["news-pname", "news-pdate", "news-purl", "news-pnote", "news-sku"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", paintNewsPlate);
   });
   document.getElementById("tables-back").addEventListener("click", () => {
     showDesk();

@@ -31,6 +31,7 @@ button { cursor: pointer; }
 button:active { transform: scale(0.985); }
 input, textarea, select { padding: 12px 12px; width: 100%; }
 textarea { min-height: 72px; resize: vertical; }
+textarea.tall { min-height: 168px; }
 label {
   display: block;
   margin: 0 0 6px;
@@ -290,6 +291,11 @@ label {
 .dock-inner {
   max-width: 760px;
   margin: 0 auto;
+}
+.dock-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 .actions {
@@ -732,4 +738,49 @@ td.listings-cell { max-width: 420px; }
   border: 0;
   width: 100%;
   cursor: pointer;
+}
+.foot-link + .foot-link { margin-top: 10px; }
+
+.news-plate {
+  border: var(--stroke) solid var(--ink);
+  background: var(--paper);
+  padding: 14px 14px 10px;
+  margin: 0 0 20px;
+}
+.news-plate-row {
+  padding: 10px 0 12px;
+  border-bottom: 1px solid var(--ink);
+}
+.news-plate-row:last-child { border-bottom: 0; }
+.news-plate-row span {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+}
+.news-plate-row b {
+  display: block;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+.news-buy {
+  border: var(--stroke) solid var(--ink);
+  padding: 10px 12px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  word-break: break-all;
+  background: var(--paper);
+}
+.news-buy.note {
+  border: 0;
+  padding: 0;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  word-break: normal;
 }

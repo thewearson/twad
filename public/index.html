@@ -47,7 +47,10 @@
       </div>
       <div class="dock">
         <div class="dock-inner">
-          <button type="button" class="btn ink" id="add-star">Add star</button>
+          <div class="dock-split">
+            <button type="button" class="btn ink" id="add-star">Add star</button>
+            <button type="button" class="btn" id="open-news">Drip News</button>
+          </div>
         </div>
       </div>
     </div>
@@ -160,6 +163,84 @@
         <button type="button" class="btn" id="card-url-add" style="margin:8px 0 20px;width:auto">Add URL</button>
         <button type="button" class="btn ink" id="card-next">Next</button>
         <button type="button" class="btn" id="card-skip" style="margin-top:8px">Skip card</button>
+      </div>
+    </div>
+
+    <div id="screen-news" class="screen hidden">
+      <div class="wrap">
+        <div class="stars-head">
+          <div>
+            <h1>Drip News</h1>
+            <p class="sub">Daily cultural intelligence.</p>
+          </div>
+          <p class="desc">PHOTO. TITLE. DEK.<br>THEN THE PRODUCT PLATE.<br>SAME BOX AS THE ARCHIVE CARD.</p>
+        </div>
+        <div class="rule"></div>
+        <p id="news-msg" class="muted"></p>
+        <div id="news-list" class="posts"></div>
+      </div>
+      <div class="dock">
+        <div class="dock-inner">
+          <button type="button" class="btn ink" id="news-add">Add dispatch</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="screen-news-edit" class="screen hidden">
+      <div class="wrap">
+        <p class="step" id="news-step">New dispatch</p>
+        <p class="hint">Up to 5 photos. Original HD file if it is under 4096px — same pipeline as fit posts. Title and dek are the in-app preview. Body is the full article. The product plate is the archive card at the end of the story.</p>
+        <div id="news-scroller" class="photo-scroller"></div>
+        <div id="news-dots" class="photo-dots"></div>
+        <input id="news-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+        <label>Category</label>
+        <div id="news-cats" class="avail" style="margin-bottom:18px"></div>
+        <div class="field">
+          <label for="news-title">Title · preview</label>
+          <textarea id="news-title" rows="2" placeholder="THE HEADLINE"></textarea>
+        </div>
+        <div class="field">
+          <label for="news-dek">Dek · preview description</label>
+          <textarea id="news-dek" rows="3" placeholder="The short line under the title on the feed card."></textarea>
+        </div>
+        <div class="field">
+          <label for="news-body">Article</label>
+          <textarea id="news-body" class="tall" rows="8" placeholder="Full story. Opens when they tap the card."></textarea>
+        </div>
+        <div class="field">
+          <label for="news-source">Source</label>
+          <input id="news-source" placeholder="THE WEARS EDITORIAL">
+        </div>
+        <p class="step" style="margin-top:28px">Product plate</p>
+        <p class="hint">Same ink-stroke box as the archive card. If the product is out, paste the buy URL — the app opens it. If it has not dropped, write where it lands. No dead button.</p>
+        <div class="news-plate" id="news-plate">
+          <div class="news-plate-row"><span>NAME</span><b id="news-live-name">—</b></div>
+          <div class="news-plate-row"><span>RELEASE DATE</span><b id="news-live-date">—</b></div>
+          <div class="news-plate-row"><span>BUY</span><div class="news-buy" id="news-live-buy">—</div></div>
+          <div class="news-plate-row"><span>SKU</span><b id="news-live-sku">—</b></div>
+        </div>
+        <div class="field">
+          <label for="news-pname">Name</label>
+          <input id="news-pname" placeholder="OPIUM CONTRAST STITCH JACKET">
+        </div>
+        <div class="field">
+          <label for="news-pdate">Release date</label>
+          <input id="news-pdate" placeholder="3 OCT 2026">
+        </div>
+        <div class="field">
+          <label for="news-purl">Buy URL · if it is out</label>
+          <input id="news-purl" placeholder="https://">
+        </div>
+        <div class="field">
+          <label for="news-pnote">Where it drops · if it is not out</label>
+          <input id="news-pnote" placeholder="COMPLEXCON LAS VEGAS · OCT 3 + 4">
+        </div>
+        <div class="field">
+          <label for="news-sku">SKU</label>
+          <input id="news-sku" placeholder="SKU">
+        </div>
+        <button type="button" class="btn ink" id="news-save">Publish dispatch</button>
+        <p id="news-edit-msg" class="muted"></p>
       </div>
     </div>
   </section>

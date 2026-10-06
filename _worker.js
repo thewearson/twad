@@ -235,13 +235,13 @@ async function mintSession(env, email) {
   return { access_token: access, refresh_token: refresh, email };
 }
 
-const WRITE_TABLES = new Set(["artists", "outfits", "items", "archives"]);
+const WRITE_TABLES = new Set(["artists", "outfits", "items", "archives", "drip_news"]);
 const PHOTO_BUCKET = "image-artist";
 
 function safeStoragePath(raw) {
   const p = String(raw || "").replace(/^\/+/, "");
   if (p.includes("..") || p.includes("//") || p.includes("\\")) return "";
-  if (!/^(stars|fits|stories|items)\/[A-Za-z0-9._/-]+\.jpe?g$/i.test(p)) return "";
+  if (!/^(stars|fits|stories|items|news)\/[A-Za-z0-9._/-]+\.(jpe?g|png|webp)$/i.test(p)) return "";
   return p;
 }
 
@@ -306,6 +306,8 @@ async function restResponse(request, env) {
     } else if (Array.isArray(filter.outfit_ids) && filter.outfit_ids.length) {
       const ids = filter.outfit_ids.slice(0, 100).map((id) => encodeURIComponent(String(id))).join(",");
       clauses.push(`outfit_id=in.(${ids})`);
+    } else if (table === "drip_news") {
+      clauses.push("order=created_at.desc");
     } else {
       return json(400, { error: "List needs a filter." });
     }

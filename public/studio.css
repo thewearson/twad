@@ -297,6 +297,24 @@ label {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
 }
+.dock-stack {
+  display: grid;
+  gap: 8px;
+}
+.archive-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: var(--ink);
+  color: var(--paper);
+  padding: 12px 16px;
+  margin: 0 0 16px;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
 
 .actions {
   display: grid;

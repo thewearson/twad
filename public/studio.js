@@ -14,7 +14,7 @@
   const MAX_NEWS_PHOTOS = 5;
   const NEWS_CATS = ["CULTURE", "RELEASE", "ARCHIVE", "STREET", "MUSIC & FIT"];
   const NEWS_OPTIONAL = [
-    "dek", "body", "source", "image_urls",
+    "dek", "body", "source", "image_url", "image_urls",
     "product_name", "release_date", "buy_url", "buy_note", "sku", "category",
   ];
   const AVAIL = [
@@ -79,6 +79,15 @@
   let newsPick = -1;
   let newsScrollerBound = false;
   let newsCat = "CULTURE";
+  let archiveRows = [];
+  let editingArchive = null;
+  let archivePhotos = [];
+  let archiveSlide = 0;
+  let archivePick = -1;
+  let archiveScrollerBound = false;
+  const ARCHIVE_OPTIONAL = [
+    "artist_id", "artist_name", "artist", "name", "year", "image_urls", "tag", "title", "description",
+  ];
 
   function emptyCard() {
     return {
@@ -434,6 +443,7 @@
       let q = sb.from(tableName).select("*").limit(100);
       if (filter.artist_id) q = q.eq("artist_id", filter.artist_id);
       else if (filter.outfit_id) q = q.eq("outfit_id", filter.outfit_id);
+      else if (filter.archive_id) q = q.eq("archive_id", filter.archive_id);
       else if (Array.isArray(filter.outfit_ids) && filter.outfit_ids.length) q = q.in("outfit_id", filter.outfit_ids);
       else return [];
       const { data, error } = await q;
@@ -454,8 +464,26 @@
     return body;
   }
 
+  function omitBlank(row) {
+    const out = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (v == null) continue;
+      if (typeof v === "string" && !v.trim()) continue;
+      if (Array.isArray(v) && !v.length) continue;
+      out[k] = v;
+    }
+    return out;
+  }
+
+  function optionalKeyInError(msg, key) {
+    const m = String(msg || "").toLowerCase();
+    const k = String(key || "").toLowerCase();
+    if (!k) return false;
+    return m.includes(`"${k}"`) || m.includes(`'${k}'`) || m.includes(` ${k} `) || m.includes(`.${k}`) || m.endsWith(k);
+  }
+
   async function insertLoose(tableName, payload, optionalKeys) {
-    let row = { ...payload };
+    let row = omitBlank({ ...payload });
     let keys = optionalKeys.slice();
     for (;;) {
       try {
@@ -463,7 +491,7 @@
         return out.row;
       } catch (error) {
         const msg = error.message || "";
-        const hit = keys.find((k) => msg.toLowerCase().includes(k.toLowerCase()));
+        const hit = keys.find((k) => optionalKeyInError(msg, k) || msg.toLowerCase().includes(k.toLowerCase()));
         if (!hit) throw error;
         delete row[hit];
         keys = keys.filter((k) => k !== hit);
@@ -737,7 +765,7 @@
     try {
       const outfits = await loadFiltered("outfits", { artist_id: selected.id });
       outfits.sort((a, b) => postStamp(b) - postStamp(a));
-      artistPosts = outfits;
+      artistPosts = outfits.filter((o) => postKind(o) !== "VAULT");
       const ids = outfits.map((o) => o.id).filter(Boolean);
       if (ids.length) {
         const items = await loadFiltered("items", { outfit_ids: ids });
@@ -1022,9 +1050,15 @@
     fillListings(document.getElementById("card-urls"), card.listings);
     paintAvail();
     const last = cardIndex === MAX_CARDS - 1;
-    document.getElementById("card-next").textContent = last
-      ? (editingOutfit ? "Save fit check" : "Post fit check")
-      : "Next card";
+    if (mode === "archive") {
+      document.getElementById("card-next").textContent = last
+        ? (editingArchive ? "Save archive fit" : "Post archive fit")
+        : "Next card";
+    } else {
+      document.getElementById("card-next").textContent = last
+        ? (editingOutfit ? "Save fit check" : "Post fit check")
+        : "Next card";
+    }
   }
 
   function captureCardForm() {
@@ -1365,6 +1399,19 @@
     await loadArtistPosts();
   }
 
+  async function finishCurrentCards() {
+    if (mode === "archive") {
+      const wasEdit = Boolean(editingArchive);
+      await finishArchivePublish();
+      snack(wasEdit ? "ARCHIVE FIT SAVED. PULL TO REFRESH THE APP." : "ARCHIVE FIT POSTED. PULL TO REFRESH THE APP.");
+      resetArchiveCompose();
+      showScreen("archive");
+      await loadArchiveFits();
+      return;
+    }
+    await finishFitPublish();
+  }
+
   document.getElementById("card-next").addEventListener("click", async () => {
     captureCardForm();
     if (cardIndex < MAX_CARDS - 1) {
@@ -1373,7 +1420,7 @@
       return;
     }
     try {
-      await finishFitPublish();
+      await finishCurrentCards();
     } catch (err) {
       snack(err.message || String(err), true);
     }
@@ -1391,7 +1438,7 @@
       return;
     }
     try {
-      await finishFitPublish();
+      await finishCurrentCards();
     } catch (err) {
       snack(err.message || String(err), true);
     }
@@ -1713,19 +1760,20 @@
     msg.textContent = "SAVING…";
     try {
       const imageUrls = await collectNewsUrls();
-      const row = {
+      const row = omitBlank({
         category: newsCat,
         title,
         dek,
         body,
         source,
+        image_url: imageUrls[0] || "",
         image_urls: imageUrls,
         product_name: productName,
         release_date: releaseDate,
         buy_url: buyUrl,
         buy_note: buyNote,
         sku,
-      };
+      });
       if (editingNews?.id) {
         await restWrite({ op: "update", table: "drip_news", id: editingNews.id, patch: row });
         snack("DISPATCH SAVED. PULL TO REFRESH THE APP.");
@@ -1760,6 +1808,372 @@
     await loadNews();
   }
 
+  function archiveUrlList(row) {
+    return photosFromOutfit(row);
+  }
+
+  function archiveNameOf(row) {
+    return String(row?.artist_name || row?.artist || row?.name || row?.title || "").trim().toUpperCase();
+  }
+
+  function resetArchiveCompose() {
+    editingArchive = null;
+    archivePhotos.forEach((p) => forgetPreview(p.preview));
+    archivePhotos = [];
+    archiveSlide = 0;
+    archivePick = -1;
+    cardIndex = 0;
+    cards = emptyCards();
+    document.getElementById("archive-name").value = "";
+    document.getElementById("archive-year").value = "";
+    document.getElementById("archive-star").value = "";
+    document.getElementById("archive-step").textContent = "New archive fit";
+    document.getElementById("archive-next").textContent = "Next · product cards";
+    document.getElementById("archive-edit-msg").textContent = "";
+    paintArchiveBar();
+  }
+
+  function paintArchiveBar() {
+    const name = document.getElementById("archive-name").value.trim().toUpperCase() || "NAME";
+    const year = document.getElementById("archive-year").value.trim() || "YEAR";
+    document.getElementById("archive-live-name").textContent = name;
+    document.getElementById("archive-live-year").textContent = year;
+  }
+
+  function fillArchiveStars() {
+    const select = document.getElementById("archive-star");
+    const current = select.value;
+    const opts = [`<option value="">— TYPE THE NAME —</option>`]
+      .concat(artists.slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))).map((a) => {
+        const id = a.id || "";
+        const label = String(a.name || "STAR").replace(/</g, "");
+        return `<option value="${id}">${label}</option>`;
+      }));
+    select.innerHTML = opts.join("");
+    if (current && [...select.options].some((o) => o.value === current)) select.value = current;
+  }
+
+  function bindArchiveScroller() {
+    if (archiveScrollerBound) return;
+    archiveScrollerBound = true;
+    const scroller = document.getElementById("archive-scroller");
+    scroller.addEventListener("scroll", () => {
+      const w = scroller.clientWidth || 1;
+      archiveSlide = Math.round(scroller.scrollLeft / w);
+      paintArchiveDots();
+    }, { passive: true });
+  }
+
+  function paintArchiveDots() {
+    const dots = document.getElementById("archive-dots");
+    const total = archivePhotos.length < MAX_PHOTOS ? archivePhotos.length + 1 : Math.max(archivePhotos.length, 1);
+    dots.replaceChildren();
+    if (total <= 1) {
+      dots.classList.add("hidden");
+      return;
+    }
+    dots.classList.remove("hidden");
+    for (let i = 0; i < total; i++) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "dot" + (i === archiveSlide ? " on" : "");
+      b.addEventListener("click", () => {
+        const scroller = document.getElementById("archive-scroller");
+        scroller.scrollTo({ left: i * scroller.clientWidth, behavior: "smooth" });
+      });
+      dots.appendChild(b);
+    }
+  }
+
+  function openArchivePicker(index) {
+    archivePick = index;
+    document.getElementById("archive-file").click();
+  }
+
+  function removeArchivePhoto(index) {
+    const slot = archivePhotos[index];
+    if (slot) forgetPreview(slot.preview);
+    archivePhotos.splice(index, 1);
+    if (archiveSlide >= archivePhotos.length) archiveSlide = Math.max(0, archivePhotos.length - 1);
+    paintArchiveScroller();
+  }
+
+  function paintArchiveScroller() {
+    bindArchiveScroller();
+    const scroller = document.getElementById("archive-scroller");
+    scroller.replaceChildren();
+    archivePhotos.forEach((p, i) => {
+      const slide = document.createElement("div");
+      slide.className = "photo-slide";
+      const img = document.createElement("img");
+      img.src = p.preview || p.url || "";
+      img.alt = "";
+      slide.appendChild(img);
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "photo-x";
+      x.setAttribute("aria-label", "Remove photo");
+      x.textContent = "X";
+      x.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        removeArchivePhoto(i);
+      });
+      slide.appendChild(x);
+      slide.addEventListener("click", () => openArchivePicker(i));
+      scroller.appendChild(slide);
+    });
+    if (archivePhotos.length < MAX_PHOTOS) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "photo-slide add";
+      add.innerHTML = `<div class="plus">+</div><span>${archivePhotos.length ? `Add ${archivePhotos.length + 1} / ${MAX_PHOTOS}` : "Add photo"}</span>`;
+      add.addEventListener("click", () => openArchivePicker(-1));
+      scroller.appendChild(add);
+    }
+    paintArchiveDots();
+    requestAnimationFrame(() => {
+      const w = scroller.clientWidth || 1;
+      scroller.scrollLeft = archiveSlide * w;
+    });
+  }
+
+  async function loadArchiveFits() {
+    const msg = document.getElementById("archive-msg");
+    msg.textContent = "LOADING…";
+    try {
+      archiveRows = await restList("archives", {});
+    } catch (err) {
+      try {
+        const { data, error } = await sb.from("archives").select("*").order("created_at", { ascending: false }).limit(100);
+        if (error) throw error;
+        archiveRows = Array.isArray(data) ? data : [];
+      } catch (e) {
+        archiveRows = [];
+        msg.textContent = e.message || String(e);
+        paintArchiveList();
+        return;
+      }
+    }
+    archiveRows.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    msg.textContent = archiveRows.length
+      ? `${archiveRows.length} ARCHIVE FIT${archiveRows.length === 1 ? "" : "S"}.`
+      : "NO ARCHIVE FITS.";
+    paintArchiveList();
+  }
+
+  function paintArchiveList() {
+    const host = document.getElementById("archive-list");
+    host.replaceChildren();
+    archiveRows.forEach((row) => {
+      const wrap = document.createElement("div");
+      wrap.className = "post-row";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "post";
+      const urls = archiveUrlList(row);
+      const thumb = document.createElement("div");
+      thumb.className = "thumb";
+      if (urls[0]) {
+        const img = document.createElement("img");
+        img.src = urls[0];
+        img.alt = "";
+        thumb.appendChild(img);
+      }
+      const mid = document.createElement("div");
+      const kind = document.createElement("div");
+      kind.className = "kind";
+      kind.textContent = archiveNameOf(row) || "ARCHIVE";
+      const when = document.createElement("div");
+      when.className = "when";
+      when.textContent = String(row.year || "").trim() || "YEAR";
+      const n = document.createElement("div");
+      n.className = "n";
+      n.textContent = "PREMIUM";
+      mid.append(kind, when, n);
+      btn.append(thumb, mid);
+      btn.addEventListener("click", () => openArchiveEdit(row));
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "post-del";
+      del.setAttribute("aria-label", "Delete archive fit");
+      del.textContent = "X";
+      del.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        deleteArchiveFit(row);
+      });
+      wrap.append(btn, del);
+      host.appendChild(wrap);
+    });
+  }
+
+  async function openArchiveEdit(row) {
+    resetArchiveCompose();
+    mode = "archive";
+    fillArchiveStars();
+    if (row) {
+      editingArchive = row;
+      document.getElementById("archive-name").value = archiveNameOf(row);
+      document.getElementById("archive-year").value = String(row.year || "").trim();
+      const starId = row.artist_id || row.artistId || "";
+      if (starId) document.getElementById("archive-star").value = starId;
+      archivePhotos = archiveUrlList(row).map((href) => ({ blob: null, preview: href, url: href }));
+      document.getElementById("archive-step").textContent = "Edit archive fit";
+      try {
+        const items = await loadFiltered("items", { archive_id: row.id });
+        cards = cardsFromItems(items);
+      } catch {
+        cards = emptyCards();
+      }
+    }
+    paintArchiveBar();
+    paintArchiveScroller();
+    showScreen("archive-edit");
+    requestAnimationFrame(paintArchiveScroller);
+  }
+
+  async function collectArchiveUrls() {
+    const urls = [];
+    for (const slot of archivePhotos) {
+      if (slot.blob) {
+        urls.push(await uploadJpeg(`archives/${crypto.randomUUID()}.${photoExt(slot.blob)}`, slot.blob));
+      } else if (slot.url && !String(slot.url).startsWith("blob:")) {
+        urls.push(slot.url);
+      }
+    }
+    return urls.slice(0, MAX_PHOTOS);
+  }
+
+  async function saveArchiveItems(archiveId, artistId, coverUrl) {
+    let outfitId = null;
+    const optional = [
+      "outfit_id", "archive_id", "artist_id", "color", "colorway", "price", "image_url",
+      "purchase_url", "listings", "title", "name", "availability", "is_vault",
+    ];
+    async function writeItem(card, i, extra) {
+      let itemUrl = card.imageUrl || "";
+      if (card.imageBlob) {
+        itemUrl = await uploadJpeg(`items/${archiveId}/${i + 1}-${crypto.randomUUID().slice(0, 6)}.${photoExt(card.imageBlob)}`, card.imageBlob);
+      }
+      const listings = stampAvailability(
+        (card.listings || []).filter((r) => r.url),
+        card.availability,
+      );
+      const availability = normalizeAvail(card.availability);
+      const row = {
+        archive_id: archiveId,
+        artist_id: artistId || null,
+        title: card.title || "ITEM",
+        name: card.title || "ITEM",
+        brand: card.brand || "BRAND",
+        color: card.color || null,
+        colorway: card.color || null,
+        price: parsePrice(card.price),
+        image_url: itemUrl || null,
+        purchase_url: listings.find((r) => r.url)?.url || null,
+        listings,
+        availability,
+        is_vault: true,
+        ...extra,
+      };
+      if (card.id) {
+        const patch = { ...row };
+        delete patch.outfit_id;
+        await patchLoose("items", card.id, patch, optional);
+        return;
+      }
+      try {
+        await insertLoose("items", row, optional);
+      } catch (err) {
+        const msg = err.message || "";
+        if (!outfitId && /outfit_id/i.test(msg)) {
+          const outfit = await insertLoose("outfits", {
+            artist_id: artistId || null,
+            image_url: coverUrl || null,
+            title: "ARCHIVE FIT",
+            tag: "ARCHIVE",
+            is_vault: true,
+            year: document.getElementById("archive-year").value.trim() || null,
+          }, ["artist_id", "title", "tag", "is_vault", "year", "image_urls", "date"]);
+          outfitId = outfit?.id || null;
+          if (outfitId) {
+            await insertLoose("items", { ...row, outfit_id: outfitId }, optional);
+            return;
+          }
+        }
+        throw err;
+      }
+    }
+    for (let i = 0; i < cards.length; i++) {
+      const card = cards[i];
+      if (!card.brand && !card.title) {
+        if (card.id) await restWrite({ op: "delete", table: "items", id: card.id });
+        continue;
+      }
+      await writeItem(card, i, outfitId ? { outfit_id: outfitId } : {});
+    }
+  }
+
+  async function finishArchivePublish() {
+    const name = document.getElementById("archive-name").value.trim().toUpperCase();
+    const year = document.getElementById("archive-year").value.trim();
+    const artistId = document.getElementById("archive-star").value || null;
+    const msg = document.getElementById("archive-edit-msg");
+    if (!name) throw new Error("CELEBRITY NAME REQUIRED.");
+    if (!/^\d{4}$/.test(year)) throw new Error("YEAR REQUIRED. FOUR DIGITS.");
+    if (!archivePhotos.length) throw new Error("ADD AN HD PHOTO FIRST.");
+    snack(editingArchive ? "SAVING…" : "UPLOADING…");
+    if (msg) msg.textContent = "SAVING…";
+    const imageUrls = await collectArchiveUrls();
+    const row = {
+      artist_id: artistId,
+      artist_name: name,
+      artist: name,
+      name,
+      year,
+      image_url: imageUrls[0] || null,
+      image_urls: imageUrls,
+      tag: "ARCHIVE",
+      title: name,
+    };
+    let archive = editingArchive;
+    if (archive?.id) {
+      await patchLoose("archives", archive.id, row, ARCHIVE_OPTIONAL);
+    } else {
+      archive = await insertLoose("archives", row, ARCHIVE_OPTIONAL);
+    }
+    if (!archive?.id) throw new Error("ARCHIVE ROW FAILED.");
+    await saveArchiveItems(archive.id, artistId, imageUrls[0]);
+  }
+
+  async function deleteArchiveFit(row) {
+    if (!row?.id) return;
+    if (!window.confirm("DELETE THIS ARCHIVE FIT AND ITS PRODUCT CARDS?")) return;
+    snack("DELETING…");
+    try {
+      let items = [];
+      try {
+        items = await loadFiltered("items", { archive_id: row.id });
+      } catch {
+        items = [];
+      }
+      for (const item of items) {
+        if (item.id) await restWrite({ op: "delete", table: "items", id: item.id });
+      }
+      await restWrite({ op: "delete", table: "archives", id: row.id });
+      snack("ARCHIVE FIT DELETED.");
+      await loadArchiveFits();
+    } catch (err) {
+      snack(err.message || String(err), true);
+    }
+  }
+
+  async function openArchiveDesk() {
+    showScreen("archive");
+    fillArchiveStars();
+    await loadArchiveFits();
+  }
+
   backBtn.addEventListener("click", () => {
     if (screen === "card") {
       captureCardForm();
@@ -1768,7 +2182,7 @@
         paintCardForm();
         return;
       }
-      showScreen("photo");
+      showScreen(mode === "archive" ? "archive-edit" : "photo");
       return;
     }
     if (screen === "star") {
@@ -1788,6 +2202,14 @@
       showScreen("pick");
       return;
     }
+    if (screen === "archive-edit") {
+      showScreen("archive");
+      return;
+    }
+    if (screen === "archive") {
+      showScreen("pick");
+      return;
+    }
     if (screen === "artist") showScreen("pick");
   });
 
@@ -1798,6 +2220,61 @@
     await openTable(names.includes("artists") ? "artists" : names[0]);
   });
   document.getElementById("open-news").addEventListener("click", () => openNewsDesk());
+  document.getElementById("open-archive").addEventListener("click", () => openArchiveDesk());
+  document.getElementById("archive-add").addEventListener("click", () => openArchiveEdit(null));
+  document.getElementById("archive-next").addEventListener("click", () => {
+    const name = document.getElementById("archive-name").value.trim();
+    const year = document.getElementById("archive-year").value.trim();
+    if (!name) {
+      snack("CELEBRITY NAME REQUIRED.", true);
+      return;
+    }
+    if (!/^\d{4}$/.test(year)) {
+      snack("YEAR REQUIRED. FOUR DIGITS.", true);
+      return;
+    }
+    if (!archivePhotos.length) {
+      snack("ADD AN HD PHOTO FIRST.", true);
+      return;
+    }
+    mode = "archive";
+    cardIndex = 0;
+    paintCardForm();
+    showScreen("card");
+  });
+  document.getElementById("archive-file").addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const blob = await pickHd(file, "fit");
+      const href = previewUrl(blob);
+      if (archivePick >= 0 && archivePick < archivePhotos.length) {
+        forgetPreview(archivePhotos[archivePick].preview);
+        archivePhotos[archivePick] = { blob, preview: href, url: "" };
+        archiveSlide = archivePick;
+      } else if (archivePhotos.length < MAX_PHOTOS) {
+        archivePhotos.push({ blob, preview: href, url: "" });
+        archiveSlide = archivePhotos.length - 1;
+      } else {
+        snack(`MAX ${MAX_PHOTOS} PHOTOS.`, true);
+        URL.revokeObjectURL(href);
+        return;
+      }
+      archivePick = -1;
+      paintArchiveScroller();
+    } catch (err) {
+      snack(err.message || String(err), true);
+    }
+  });
+  document.getElementById("archive-name").addEventListener("input", paintArchiveBar);
+  document.getElementById("archive-year").addEventListener("input", paintArchiveBar);
+  document.getElementById("archive-star").addEventListener("change", () => {
+    const id = document.getElementById("archive-star").value;
+    const star = artists.find((a) => a.id === id);
+    if (star?.name) document.getElementById("archive-name").value = String(star.name).toUpperCase();
+    paintArchiveBar();
+  });
   document.getElementById("news-add").addEventListener("click", () => openNewsEdit(null));
   document.getElementById("news-save").addEventListener("click", saveNews);
   document.getElementById("news-file").addEventListener("change", async (e) => {

@@ -47,9 +47,12 @@
       </div>
       <div class="dock">
         <div class="dock-inner">
-          <div class="dock-split">
-            <button type="button" class="btn ink" id="add-star">Add star</button>
-            <button type="button" class="btn" id="open-news">Drip News</button>
+          <div class="dock-stack">
+            <div class="dock-split">
+              <button type="button" class="btn ink" id="add-star">Add star</button>
+              <button type="button" class="btn" id="open-news">Drip News</button>
+            </div>
+            <button type="button" class="btn" id="open-archive">Archive Fits</button>
           </div>
         </div>
       </div>
@@ -241,6 +244,54 @@
         </div>
         <button type="button" class="btn ink" id="news-save">Publish dispatch</button>
         <p id="news-edit-msg" class="muted"></p>
+      </div>
+    </div>
+
+    <div id="screen-archive" class="screen hidden">
+      <div class="wrap">
+        <div class="stars-head">
+          <div>
+            <h1>Archive Fits</h1>
+            <p class="sub">Premium vault. Name + year on the black bar.</p>
+          </div>
+          <p class="desc">FIT CARD IN THE MENU.<br>PRODUCT CARDS ON TAP.<br>HIDDEN FROM FEED, SEARCH, STARS.</p>
+        </div>
+        <div class="rule"></div>
+        <p id="archive-msg" class="muted"></p>
+        <div id="archive-list" class="posts"></div>
+      </div>
+      <div class="dock">
+        <div class="dock-inner">
+          <button type="button" class="btn ink" id="archive-add">New archive fit</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="screen-archive-edit" class="screen hidden">
+      <div class="wrap">
+        <p class="step" id="archive-step">New archive fit</p>
+        <p class="hint">Celebrity name and year sit on the black bar. Product cards open after the member taps the fit. Same store URLs and stock labels as a fit check.</p>
+        <div class="archive-bar" id="archive-live-bar">
+          <span id="archive-live-name">NAME</span>
+          <span id="archive-live-year">YEAR</span>
+        </div>
+        <div id="archive-scroller" class="photo-scroller"></div>
+        <div id="archive-dots" class="photo-dots"></div>
+        <input id="archive-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+        <div class="field">
+          <label for="archive-star">Star · optional</label>
+          <select id="archive-star"></select>
+        </div>
+        <div class="field">
+          <label for="archive-name">Celebrity name · black bar</label>
+          <input id="archive-name" placeholder="NAME ON THE CARD" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="archive-year">Year · black bar</label>
+          <input id="archive-year" inputmode="numeric" maxlength="4" placeholder="2021" autocomplete="off">
+        </div>
+        <button type="button" class="btn ink" id="archive-next">Next · product cards</button>
+        <p id="archive-edit-msg" class="muted"></p>
       </div>
     </div>
   </section>

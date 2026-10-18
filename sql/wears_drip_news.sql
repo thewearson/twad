@@ -18,13 +18,26 @@ CREATE TABLE IF NOT EXISTS public.drip_news (
   sku text NOT NULL DEFAULT ''
 );
 
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS category text;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS title text;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS dek text;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS body text;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS source text;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS image_url text;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS image_urls jsonb;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS product_name text;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS release_date text;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS buy_url text;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS buy_note text;
+ALTER TABLE public.drip_news ADD COLUMN IF NOT EXISTS sku text;
+
 CREATE INDEX IF NOT EXISTS drip_news_created_at_idx
   ON public.drip_news (created_at DESC);
 
 ALTER TABLE public.drip_news ENABLE ROW LEVEL SECURITY;
 
-GRANT SELECT ON TABLE public.drip_news TO anon, authenticated;
-GRANT INSERT, UPDATE, DELETE ON TABLE public.drip_news TO authenticated;
+GRANT SELECT ON TABLE public.drip_news TO anon, authenticated, service_role;
+GRANT INSERT, UPDATE, DELETE ON TABLE public.drip_news TO authenticated, service_role;
 
 DO $$
 BEGIN
@@ -63,3 +76,5 @@ SET
   file_size_limit = 16777216,
   allowed_mime_types = ARRAY['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
 WHERE id = 'image-artist';
+
+NOTIFY pgrst, 'reload schema';

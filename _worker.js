@@ -135,7 +135,9 @@ function anonKey(env) {
 function errText(data) {
   if (!data) return "";
   if (typeof data === "string") return data;
-  return data.msg || data.message || data.error_description || data.error || "";
+  const main = data.msg || data.message || data.error_description || (typeof data.error === "string" ? data.error : "") || "";
+  const extra = [data.details, data.hint].filter((v) => typeof v === "string" && v.trim()).join(" ");
+  return extra ? `${main} ${extra}`.trim() : String(main || "");
 }
 
 async function sbFetch(env, path, { method = "POST", body, extra = {}, key } = {}) {
@@ -241,7 +243,7 @@ const PHOTO_BUCKET = "image-artist";
 function safeStoragePath(raw) {
   const p = String(raw || "").replace(/^\/+/, "");
   if (p.includes("..") || p.includes("//") || p.includes("\\")) return "";
-  if (!/^(stars|fits|stories|items|news)\/[A-Za-z0-9._/-]+\.(jpe?g|png|webp)$/i.test(p)) return "";
+  if (!/^(stars|fits|stories|items|news|archives)\/[A-Za-z0-9._/-]+\.(jpe?g|png|webp)$/i.test(p)) return "";
   return p;
 }
 
@@ -306,7 +308,9 @@ async function restResponse(request, env) {
     } else if (Array.isArray(filter.outfit_ids) && filter.outfit_ids.length) {
       const ids = filter.outfit_ids.slice(0, 100).map((id) => encodeURIComponent(String(id))).join(",");
       clauses.push(`outfit_id=in.(${ids})`);
-    } else if (table === "drip_news") {
+    } else if (filter.archive_id) {
+      clauses.push(`archive_id=eq.${encodeURIComponent(String(filter.archive_id))}`);
+    } else if (table === "drip_news" || table === "archives") {
       clauses.push("order=created_at.desc");
     } else {
       return json(400, { error: "List needs a filter." });

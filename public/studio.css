@@ -802,3 +802,101 @@ td.listings-cell { max-width: 420px; }
   letter-spacing: 0.3px;
   word-break: normal;
 }
+.pr-card {
+  border: var(--stroke) solid var(--ink);
+  padding: 16px;
+  margin: 0 0 12px;
+  background: var(--paper);
+}
+.pr-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+}
+.pr-card h2 {
+  margin: 10px 0 6px;
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.pr-card p { margin: 0 0 12px; font-size: 12px; font-weight: 600; line-height: 1.45; }
+.pr-shots {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin: 0 0 14px;
+}
+.pr-shots img {
+  width: 100%;
+  aspect-ratio: 0.78;
+  object-fit: cover;
+  background: var(--ph);
+  display: block;
+}
+.pr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.pr-actions .btn { width: auto; }
+
+.members-wrap { overflow-x: auto; margin: 0 0 40px; }
+.members {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+}
+.members th {
+  text-align: left;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  padding: 0 14px 10px 0;
+  border-bottom: var(--stroke) solid var(--ink);
+  white-space: nowrap;
+}
+.members td {
+  padding: 12px 14px 12px 0;
+  border-bottom: 1px solid var(--ink12);
+  vertical-align: top;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.members .nick {
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.members .mail {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ink54);
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: normal;
+  word-break: break-all;
+}
+.members .gate,
+.members .plan {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 1.2px;
+}
+.members .mark {
+  display: block;
+  margin-top: 3px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1.1px;
+  color: var(--ink54);
+}

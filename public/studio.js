@@ -73,6 +73,10 @@
   let artistPosts = [];
   let itemsByOutfit = {};
   let newsRows = [];
+  let prRows = [];
+  let memberRows = [];
+  let memberFilter = "ALL";
+  const MEMBER_GATES = ["ALL", "PREMIUM", "HOUSE", "APPLE", "GOOGLE"];
   let editingNews = null;
   let newsPhotos = [];
   let newsSlide = 0;
@@ -1808,12 +1812,303 @@
     await loadNews();
   }
 
+  const PR_SPAN_DAYS = { d3: 3, w1: 7, w2: 14, m1: 30 };
+  const PR_REJECT = [
+    { id: "fit", label: "BAD FIT" },
+    { id: "photo", label: "LOW PHOTO" },
+    { id: "off", label: "OFF-BRIEF" },
+    { id: "edit", label: "NOT EDITORIAL" },
+  ];
+
+  async function loadPrDesk() {
+    const msg = document.getElementById("pr-msg");
+    msg.textContent = "LOADING…";
+    try {
+      prRows = await restList("pr_submissions", {});
+    } catch (err) {
+      try {
+        const { data, error } = await sb.from("pr_submissions").select("*").order("created_at", { ascending: false }).limit(80);
+        if (error) throw error;
+        prRows = Array.isArray(data) ? data : [];
+      } catch (e) {
+        prRows = [];
+        msg.textContent = `${e.message || e}\nNazım SQL: supabase/wears_pr_desk.sql`;
+        paintPrList();
+        return;
+      }
+    }
+    msg.textContent = prRows.length ? `${prRows.length} IN THE DESK` : "NO CHECKS.";
+    paintPrList();
+  }
+
+  function paintPrList() {
+    const host = document.getElementById("pr-list");
+    host.innerHTML = "";
+    const pending = prRows.filter((r) => String(r.status || "") === "pending");
+    const rest = prRows.filter((r) => String(r.status || "") !== "pending");
+    const rows = pending.concat(rest);
+    if (!rows.length) return;
+    rows.forEach((row) => {
+      const wrap = document.createElement("div");
+      wrap.className = "pr-card";
+      const head = document.createElement("div");
+      head.className = "pr-head";
+      const kind = document.createElement("span");
+      kind.textContent = String(row.kind || "").replace("_", " ").toUpperCase() || "CHECK";
+      const st = document.createElement("b");
+      st.textContent = String(row.status || "pending").toUpperCase();
+      head.append(kind, st);
+      const nick = document.createElement("h2");
+      nick.textContent = row.nickname || row.legal_name || "—";
+      const meta = document.createElement("p");
+      meta.className = "muted";
+      meta.textContent = `${row.legal_name || ""} · @${(row.instagram || "").replace(/^@/, "")} · ${row.span || ""} · ${(row.price_cents / 100).toFixed(0)} USD · ${row.email || ""}`;
+      const about = document.createElement("p");
+      about.textContent = row.about || "";
+      const shots = document.createElement("div");
+      shots.className = "pr-shots";
+      const urls = Array.isArray(row.photo_urls) ? row.photo_urls : [];
+      if (row.avatar_url) urls.unshift(row.avatar_url);
+      urls.slice(0, 4).forEach((href) => {
+        const img = document.createElement("img");
+        img.src = href;
+        img.alt = "";
+        shots.appendChild(img);
+      });
+      wrap.append(head, nick, meta, about, shots);
+      if (String(row.status) === "pending") {
+        const actions = document.createElement("div");
+        actions.className = "pr-actions";
+        const go = document.createElement("button");
+        go.type = "button";
+        go.className = "btn ink";
+        go.textContent = "Approve · charge clears";
+        go.addEventListener("click", () => approvePr(row));
+        actions.appendChild(go);
+        PR_REJECT.forEach((why) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "btn";
+          b.textContent = why.label;
+          b.addEventListener("click", () => rejectPr(row, why.label));
+          actions.appendChild(b);
+        });
+        wrap.appendChild(actions);
+      }
+      host.appendChild(wrap);
+    });
+  }
+
+  async function approvePr(row) {
+    const days = PR_SPAN_DAYS[row.span] || 3;
+    const now = new Date();
+    const until = new Date(now.getTime() + days * 86400000);
+    try {
+      await restWrite({
+        op: "update",
+        table: "pr_submissions",
+        id: row.id,
+        patch: {
+          status: "live",
+          hold: false,
+          reviewed_at: now.toISOString(),
+          live_at: now.toISOString(),
+          live_until: until.toISOString(),
+        },
+      });
+      snack("LIVE. CHARGE CLEARS. PIN GOES UP.");
+      await loadPrDesk();
+    } catch (err) {
+      snack(err.message || String(err), true);
+    }
+  }
+
+  async function rejectPr(row, reason) {
+    try {
+      await restWrite({
+        op: "update",
+        table: "pr_submissions",
+        id: row.id,
+        patch: {
+          status: "rejected",
+          hold: false,
+          reject_reason: reason,
+          reviewed_at: new Date().toISOString(),
+        },
+      });
+      snack("PASSED. IN-APP NOTE + MAIL WHEN THE PIPE IS LIVE.");
+      await loadPrDesk();
+    } catch (err) {
+      snack(err.message || String(err), true);
+    }
+  }
+
+  async function openPrDesk() {
+    showScreen("pr");
+    await loadPrDesk();
+  }
+
+  function memberGateName(raw) {
+    const p = String(raw || "email").trim().toLowerCase();
+    if (p === "apple") return "APPLE";
+    if (p === "google") return "GOOGLE";
+    if (p === "email" || p === "phone" || !p) return "HOUSE";
+    return p.toUpperCase();
+  }
+
+  function memberGates(row) {
+    const bits = String(row.providers || row.provider || "email")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const names = [...new Set((bits.length ? bits : ["email"]).map(memberGateName))];
+    return names.join(" · ");
+  }
+
+  function memberHasGate(row, gate) {
+    return memberGates(row).split(" · ").includes(gate);
+  }
+
+  function memberWhen(raw) {
+    if (!raw) return "—";
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }).toUpperCase();
+  }
+
+  function filteredMembers() {
+    return memberRows.filter((row) => {
+      if (memberFilter === "ALL") return true;
+      if (memberFilter === "PREMIUM") return !!row.is_premium;
+      return memberHasGate(row, memberFilter);
+    });
+  }
+
+  function renderMemberChips() {
+    const host = document.getElementById("members-chips");
+    host.replaceChildren();
+    MEMBER_GATES.forEach((g) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip" + (g === memberFilter ? " on" : "");
+      b.textContent = g;
+      b.addEventListener("click", () => {
+        memberFilter = g;
+        renderMemberChips();
+        paintMembers();
+      });
+      host.appendChild(b);
+    });
+  }
+
+  function paintMembers() {
+    const host = document.getElementById("members-list");
+    const list = filteredMembers();
+    const prem = memberRows.filter((r) => r.is_premium).length;
+    document.getElementById("members-kicker").textContent = memberRows.length
+      ? `${memberRows.length} MEMBER(S) · ${prem} PREMIUM. OPENED ON DEMAND.`
+      : "PREMIUM AND HOW THEY JOINED. OPENS ON DEMAND.";
+    document.getElementById("members-msg").textContent = list.length
+      ? `${list.length} SHOWN.`
+      : memberRows.length
+        ? "NOBODY IN THIS FILTER."
+        : "NO MEMBERS YET.";
+    host.replaceChildren();
+    if (!list.length) return;
+    const table = document.createElement("table");
+    table.className = "members";
+    const head = document.createElement("thead");
+    const hr = document.createElement("tr");
+    ["NICK", "GATE", "PLAN", "JOINED", "LAST IN"].forEach((label) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      hr.appendChild(th);
+    });
+    head.appendChild(hr);
+    const body = document.createElement("tbody");
+    list.forEach((row) => {
+      const tr = document.createElement("tr");
+      const nick = document.createElement("td");
+      const name = document.createElement("span");
+      name.className = "nick";
+      name.textContent = row.username || "—";
+      nick.appendChild(name);
+      if (row.email) {
+        const mail = document.createElement("span");
+        mail.className = "mail";
+        mail.textContent = row.email;
+        nick.appendChild(mail);
+      }
+      const gate = document.createElement("td");
+      gate.className = "gate";
+      gate.textContent = memberGates(row);
+      const plan = document.createElement("td");
+      plan.className = "plan";
+      plan.textContent = row.is_premium ? "PREMIUM" : "FREE";
+      const marks = [];
+      if (row.is_admin) marks.push("STUDIO");
+      if (row.is_frozen) marks.push("FROZEN");
+      if (marks.length) {
+        const mark = document.createElement("span");
+        mark.className = "mark";
+        mark.textContent = marks.join(" · ");
+        plan.appendChild(mark);
+      }
+      const joined = document.createElement("td");
+      joined.textContent = memberWhen(row.created_at);
+      const last = document.createElement("td");
+      last.textContent = memberWhen(row.last_sign_in_at);
+      tr.append(nick, gate, plan, joined, last);
+      body.appendChild(tr);
+    });
+    table.append(head, body);
+    host.appendChild(table);
+  }
+
+  async function loadMembers() {
+    const msg = document.getElementById("members-msg");
+    msg.textContent = "LOADING…";
+    try {
+      const { data, error } = await sb.rpc("wears_studio_members");
+      if (error) throw error;
+      memberRows = Array.isArray(data) ? data : [];
+      paintMembers();
+    } catch (err) {
+      memberRows = [];
+      paintMembers();
+      msg.textContent = `${err.message || err}\nNazım SQL: twad/sql/wears_studio_members.sql`;
+    }
+  }
+
+  async function openMembersDesk() {
+    showScreen("members");
+    renderMemberChips();
+    await loadMembers();
+  }
+
   function archiveUrlList(row) {
     return photosFromOutfit(row);
   }
 
+  function onceName(raw) {
+    let s = String(raw || "").trim().toUpperCase().replace(/\s+/g, " ");
+    const words = s.split(" ").filter(Boolean);
+    if (words.length >= 2 && words.length % 2 === 0) {
+      const mid = words.length / 2;
+      const a = words.slice(0, mid).join(" ");
+      const b = words.slice(mid).join(" ");
+      if (a === b) return a;
+    }
+    return s;
+  }
+
   function archiveNameOf(row) {
-    return String(row?.artist_name || row?.artist || row?.name || row?.title || "").trim().toUpperCase();
+    return onceName(row?.artist_name || row?.name || row?.artist || "");
+  }
+
+  function archiveYearOf(row) {
+    const m = String(row?.year || "").trim().match(/(\d{4})/);
+    return m ? m[1] : "";
   }
 
   function resetArchiveCompose() {
@@ -1834,10 +2129,11 @@
   }
 
   function paintArchiveBar() {
-    const name = document.getElementById("archive-name").value.trim().toUpperCase() || "NAME";
-    const year = document.getElementById("archive-year").value.trim() || "YEAR";
+    const name = onceName(document.getElementById("archive-name").value) || "NAME";
+    const typed = document.getElementById("archive-year").value.trim();
+    const year = (typed.match(/(\d{4})/) || [])[1] || "YEAR";
     document.getElementById("archive-live-name").textContent = name;
-    document.getElementById("archive-live-year").textContent = year;
+    document.getElementById("archive-live-year").textContent = year === name ? "YEAR" : year;
   }
 
   function fillArchiveStars() {
@@ -1981,12 +2277,14 @@
         thumb.appendChild(img);
       }
       const mid = document.createElement("div");
+      const person = archiveNameOf(row);
       const kind = document.createElement("div");
       kind.className = "kind";
-      kind.textContent = archiveNameOf(row) || "ARCHIVE";
+      kind.textContent = person || "ARCHIVE";
       const when = document.createElement("div");
       when.className = "when";
-      when.textContent = String(row.year || "").trim() || "YEAR";
+      const year = archiveYearOf(row);
+      when.textContent = year && year !== person ? year : "";
       const n = document.createElement("div");
       n.className = "n";
       n.textContent = "PREMIUM";
@@ -2014,7 +2312,7 @@
     if (row) {
       editingArchive = row;
       document.getElementById("archive-name").value = archiveNameOf(row);
-      document.getElementById("archive-year").value = String(row.year || "").trim();
+      document.getElementById("archive-year").value = archiveYearOf(row);
       const starId = row.artist_id || row.artistId || "";
       if (starId) document.getElementById("archive-star").value = starId;
       archivePhotos = archiveUrlList(row).map((href) => ({ blob: null, preview: href, url: href }));
@@ -2134,7 +2432,7 @@
       image_url: imageUrls[0] || null,
       image_urls: imageUrls,
       tag: "ARCHIVE",
-      title: name,
+      title: "",
     };
     let archive = editingArchive;
     if (archive?.id) {
@@ -2210,6 +2508,14 @@
       showScreen("pick");
       return;
     }
+    if (screen === "pr") {
+      showScreen("pick");
+      return;
+    }
+    if (screen === "members") {
+      showScreen("pick");
+      return;
+    }
     if (screen === "artist") showScreen("pick");
   });
 
@@ -2221,6 +2527,8 @@
   });
   document.getElementById("open-news").addEventListener("click", () => openNewsDesk());
   document.getElementById("open-archive").addEventListener("click", () => openArchiveDesk());
+  document.getElementById("open-pr")?.addEventListener("click", () => openPrDesk());
+  document.getElementById("open-members").addEventListener("click", () => openMembersDesk());
   document.getElementById("archive-add").addEventListener("click", () => openArchiveEdit(null));
   document.getElementById("archive-next").addEventListener("click", () => {
     const name = document.getElementById("archive-name").value.trim();

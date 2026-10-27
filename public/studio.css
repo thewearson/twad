@@ -900,3 +900,37 @@ td.listings-cell { max-width: 420px; }
   letter-spacing: 1.1px;
   color: var(--ink54);
 }
+.members .grant {
+  display: inline-flex;
+  width: auto;
+  min-height: 32px;
+  margin-top: 8px;
+  padding: 0 10px;
+  font-size: 9px;
+  letter-spacing: 1.2px;
+}
+.members .grant:disabled {
+  opacity: 0.45;
+}
+.stats-today {
+  margin: 0 0 24px;
+}
+.stats-today .sub {
+  margin: 0 0 8px;
+}
+.stats-people {
+  margin: 0;
+  font-size: 40px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+.stats-time {
+  margin: 8px 0 0;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--ink54);
+}

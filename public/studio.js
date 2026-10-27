@@ -76,7 +76,9 @@
   let prRows = [];
   let memberRows = [];
   let memberFilter = "ALL";
+  let memberBusy = "";
   const MEMBER_GATES = ["ALL", "PREMIUM", "HOUSE", "APPLE", "GOOGLE"];
+  let statsRows = [];
   let editingNews = null;
   let newsPhotos = [];
   let newsSlide = 0;
@@ -1950,9 +1952,9 @@
 
   function memberGateName(raw) {
     const p = String(raw || "email").trim().toLowerCase();
-    if (p === "apple") return "APPLE";
-    if (p === "google") return "GOOGLE";
-    if (p === "email" || p === "phone" || !p) return "HOUSE";
+    if (p === "apple" || p === "apple.com" || p.includes("apple")) return "APPLE";
+    if (p === "google" || p === "google.com" || p.includes("google")) return "GOOGLE";
+    if (p === "email" || p === "password" || p === "phone" || p === "firebase" || !p) return "HOUSE";
     return p.toUpperCase();
   }
 
@@ -2054,6 +2056,15 @@
         mark.textContent = marks.join(" · ");
         plan.appendChild(mark);
       }
+      const grant = document.createElement("button");
+      grant.type = "button";
+      grant.className = "btn grant" + (row.is_premium ? " ghost" : " ink");
+      grant.textContent = memberBusy === row.id
+        ? "WAIT"
+        : (row.is_premium ? "REVOKE" : "GRANT PREMIUM");
+      grant.disabled = memberBusy === row.id;
+      grant.addEventListener("click", () => setMemberPremium(row.id, !row.is_premium));
+      plan.appendChild(grant);
       const joined = document.createElement("td");
       joined.textContent = memberWhen(row.created_at);
       const last = document.createElement("td");
@@ -2084,6 +2095,112 @@
     showScreen("members");
     renderMemberChips();
     await loadMembers();
+  }
+
+  async function setMemberPremium(id, on) {
+    if (!id || memberBusy) return;
+    memberBusy = id;
+    paintMembers();
+    try {
+      const { error } = await sb.rpc("wears_studio_set_premium", {
+        member: id,
+        on_premium: on,
+      });
+      if (error) throw error;
+      const row = memberRows.find((r) => r.id === id);
+      if (row) row.is_premium = on;
+      snack(on ? "PREMIUM GRANTED." : "PREMIUM REVOKED.");
+    } catch (err) {
+      snack(`${err.message || err}\nNazım SQL: twad/sql/wears_studio_stats_premium.sql`, true);
+    }
+    memberBusy = "";
+    paintMembers();
+  }
+
+  function statsWhen(raw) {
+    if (!raw) return "—";
+    const d = new Date(`${raw}T00:00:00Z`);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }).toUpperCase();
+  }
+
+  function statsSpan(sec) {
+    const s = Math.max(0, Math.floor(Number(sec) || 0));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (h > 0) return `${h}H ${m}M`;
+    return `${m}M`;
+  }
+
+  function paintStats() {
+    const todayHost = document.getElementById("stats-today");
+    const listHost = document.getElementById("stats-list");
+    const today = statsRows[0] || { people: 0, seconds: 0 };
+    const people = Number(today.people) || 0;
+    const seconds = Number(today.seconds) || 0;
+    document.getElementById("stats-kicker").textContent = statsRows.length
+      ? `LAST 14 DAYS. SIGNED-IN MEMBERS. FOREGROUND ONLY.`
+      : "WHO OPENED THE APP. TIME IN THE FOREGROUND.";
+    todayHost.replaceChildren();
+    const kicker = document.createElement("p");
+    kicker.className = "sub";
+    kicker.textContent = "TODAY";
+    const who = document.createElement("p");
+    who.className = "stats-people";
+    who.textContent = `${people} ${people === 1 ? "PERSON" : "PEOPLE"}`;
+    const time = document.createElement("p");
+    time.className = "stats-time";
+    time.textContent = statsSpan(seconds);
+    todayHost.append(kicker, who, time);
+    listHost.replaceChildren();
+    if (!statsRows.length) return;
+    const table = document.createElement("table");
+    table.className = "members";
+    const head = document.createElement("thead");
+    const hr = document.createElement("tr");
+    ["DAY", "PEOPLE", "TIME"].forEach((label) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      hr.appendChild(th);
+    });
+    head.appendChild(hr);
+    const body = document.createElement("tbody");
+    statsRows.forEach((row) => {
+      const tr = document.createElement("tr");
+      const day = document.createElement("td");
+      day.textContent = statsWhen(row.day);
+      const whoCell = document.createElement("td");
+      whoCell.className = "plan";
+      whoCell.textContent = String(Number(row.people) || 0);
+      const timeCell = document.createElement("td");
+      timeCell.className = "plan";
+      timeCell.textContent = statsSpan(row.seconds);
+      tr.append(day, whoCell, timeCell);
+      body.appendChild(tr);
+    });
+    table.append(head, body);
+    listHost.appendChild(table);
+  }
+
+  async function loadStats() {
+    const msg = document.getElementById("stats-msg");
+    msg.textContent = "LOADING…";
+    try {
+      const { data, error } = await sb.rpc("wears_studio_stats", { span: 14 });
+      if (error) throw error;
+      statsRows = Array.isArray(data) ? data : [];
+      paintStats();
+      msg.textContent = statsRows.length ? "UTC DAYS." : "NO DAYS YET.";
+    } catch (err) {
+      statsRows = [];
+      paintStats();
+      msg.textContent = `${err.message || err}\nNazım SQL: twad/sql/wears_studio_stats_premium.sql`;
+    }
+  }
+
+  async function openStatsDesk() {
+    showScreen("stats");
+    await loadStats();
   }
 
   function archiveUrlList(row) {
@@ -2516,6 +2633,10 @@
       showScreen("pick");
       return;
     }
+    if (screen === "stats") {
+      showScreen("pick");
+      return;
+    }
     if (screen === "artist") showScreen("pick");
   });
 
@@ -2529,6 +2650,7 @@
   document.getElementById("open-archive").addEventListener("click", () => openArchiveDesk());
   document.getElementById("open-pr")?.addEventListener("click", () => openPrDesk());
   document.getElementById("open-members").addEventListener("click", () => openMembersDesk());
+  document.getElementById("open-stats").addEventListener("click", () => openStatsDesk());
   document.getElementById("archive-add").addEventListener("click", () => openArchiveEdit(null));
   document.getElementById("archive-next").addEventListener("click", () => {
     const name = document.getElementById("archive-name").value.trim();

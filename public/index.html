@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
   <title>THE WEARS ON STUDIO</title>
-  <link rel="stylesheet" href="studio.css">
+  <link rel="stylesheet" href="studio.css?v=stats1">
 </head>
 <body>
   <section id="gate">
@@ -56,6 +56,7 @@
               <button type="button" class="btn" id="open-archive">Archive Fits</button>
               <button type="button" class="btn" id="open-members">Members</button>
             </div>
+            <button type="button" class="btn" id="open-stats">Stats</button>
           </div>
         </div>
       </div>
@@ -320,12 +321,28 @@
             <h1>Members</h1>
             <p class="sub" id="members-kicker">Premium and how they joined. Opens on demand.</p>
           </div>
-          <p class="desc">HOUSE = EMAIL + PASSWORD.<br>APPLE / GOOGLE = SIGN IN WITH.<br>NOT LOADED WITH STARS.</p>
+          <p class="desc">HOUSE = EMAIL + PASSWORD.<br>APPLE / GOOGLE = SIGN IN WITH.<br>GRANT PREMIUM FROM THE ROW.</p>
         </div>
         <div class="chips" id="members-chips"></div>
         <div class="rule"></div>
         <p id="members-msg" class="muted"></p>
         <div class="members-wrap" id="members-list"></div>
+      </div>
+    </div>
+
+    <div id="screen-stats" class="screen hidden">
+      <div class="wrap">
+        <div class="stars-head">
+          <div>
+            <h1>Stats</h1>
+            <p class="sub" id="stats-kicker">Who opened the app. Time in the foreground.</p>
+          </div>
+          <p class="desc">SIGNED-IN MEMBERS ONLY.<br>FOREGROUND TIME.<br>LAST 14 DAYS. NOT PER PERSON.</p>
+        </div>
+        <div class="rule"></div>
+        <div class="stats-today" id="stats-today"></div>
+        <p id="stats-msg" class="muted"></p>
+        <div class="members-wrap" id="stats-list"></div>
       </div>
     </div>
   </section>
@@ -365,6 +382,6 @@
 
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="studio.js"></script>
+  <script src="studio.js?v=stats1"></script>
 </body>
 </html>

@@ -9,7 +9,7 @@
     "ITALY", "SPAIN", "NETHERLANDS", "POLAND", "PORTUGAL", "UKRAINE", "JAPAN",
     "SOUTH KOREA", "CHINA", "NIGERIA", "BARBADOS", "AUSTRALIA",
   ];
-  const MAX_CARDS = 3;
+  const MAX_CARDS = 5;
   const MAX_PHOTOS = 3;
   const MAX_NEWS_PHOTOS = 5;
   const NEWS_CATS = ["CULTURE", "RELEASE", "ARCHIVE", "STREET", "MUSIC & FIT"];
@@ -110,7 +110,7 @@
     };
   }
   function emptyCards() {
-    return [emptyCard(), emptyCard(), emptyCard()];
+    return Array.from({ length: MAX_CARDS }, emptyCard);
   }
 
   function snack(msg, bad) {

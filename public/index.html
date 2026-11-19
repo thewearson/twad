@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
   <title>THE WEARS ON STUDIO</title>
-  <link rel="stylesheet" href="studio.css?v=stats1">
+  <link rel="stylesheet" href="studio.css?v=nosize1">
 </head>
 <body>
   <section id="gate">
@@ -121,10 +121,23 @@
     <div id="screen-photo" class="screen hidden">
       <div class="wrap">
         <p class="step" id="photo-step">Fit check · photos</p>
-        <p class="hint" id="photo-hint">Up to 3. Swipe like Instagram. 1080px min.</p>
+        <p class="hint" id="photo-hint">Up to 3. Swipe like Instagram. Centered on the plate.</p>
         <div id="photo-scroller" class="photo-scroller"></div>
         <div id="photo-dots" class="photo-dots"></div>
         <input id="fit-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+        <div id="couple-box" class="couple-box hidden">
+          <p class="step">Couple</p>
+          <p class="hint">Same frame, two stars. One fit check. Both accounts carry the post.</p>
+          <div id="couple-on" class="couple-on hidden"></div>
+          <button type="button" class="btn" id="couple-add">Add second star</button>
+          <div id="couple-search" class="hidden">
+            <div class="field" style="margin-top:16px">
+              <label for="couple-q">Star in frame</label>
+              <input id="couple-q" placeholder="NAME" autocomplete="off">
+            </div>
+            <div id="couple-hits" class="couple-list"></div>
+          </div>
+        </div>
         <div class="dock-inner" style="margin-top:20px">
           <button type="button" class="btn ink" id="photo-next">Next</button>
         </div>
@@ -196,10 +209,12 @@
     <div id="screen-news-edit" class="screen hidden">
       <div class="wrap">
         <p class="step" id="news-step">New dispatch</p>
-        <p class="hint">Up to 5 photos. Original HD file if it is under 4096px — same pipeline as fit posts. Title and dek are the in-app preview. Body is the full article. The product plate is the archive card at the end of the story.</p>
-        <div id="news-scroller" class="photo-scroller"></div>
+        <p class="hint">Up to 5 photos. Pick them together or one by one. Large camera files are compressed in Studio so they still publish. Title and dek are the in-app preview. Body is the full article. The product plate is the archive card at the end of the story.</p>
+        <div id="news-scroller" class="photo-scroller plate"></div>
         <div id="news-dots" class="photo-dots"></div>
-        <input id="news-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+        <p class="news-photo-meta" id="news-photo-meta">PHOTOS 0 / 5</p>
+        <button type="button" class="btn" id="news-add-photos">Add photos</button>
+        <input id="news-file" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple hidden>
         <label>Category</label>
         <div id="news-cats" class="avail" style="margin-bottom:18px"></div>
         <div class="field">
@@ -382,6 +397,6 @@
 
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="studio.js?v=stats1"></script>
+  <script src="studio.js?v=nosize1"></script>
 </body>
 </html>

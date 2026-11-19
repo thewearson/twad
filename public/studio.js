@@ -70,6 +70,8 @@
   let cards = emptyCards();
   let snackTimer = 0;
   let editingOutfit = null;
+  let guestArtist = null;
+  let coupleOpen = false;
   let artistPosts = [];
   let itemsByOutfit = {};
   let newsRows = [];
@@ -324,36 +326,86 @@
     await bootDesk(user);
   }
 
+  const FILE_CAP = 48 * 1024 * 1024;
+  const UPLOAD_BUDGET = 4.5 * 1024 * 1024;
+
+  function probeRasterSize(buf) {
+    if (!buf || buf.byteLength < 24) return null;
+    const view = new DataView(buf);
+    const b0 = view.getUint8(0);
+    const b1 = view.getUint8(1);
+    if (b0 === 0xff && b1 === 0xd8) {
+      let offset = 2;
+      let best = null;
+      while (offset + 8 < view.byteLength) {
+        if (view.getUint8(offset) !== 0xff) {
+          offset += 1;
+          continue;
+        }
+        const marker = view.getUint8(offset + 1);
+        if (marker === 0xff) { offset += 1; continue; }
+        if (marker === 0xd9 || marker === 0xda) break;
+        if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+          offset += 2;
+          continue;
+        }
+        const len = view.getUint16(offset + 2);
+        if (len < 2) break;
+        if (marker >= 0xc0 && marker <= 0xc3) {
+          const h = view.getUint16(offset + 5);
+          const w = view.getUint16(offset + 7);
+          if (w >= 32 && h >= 32 && (!best || w * h > best.w * best.h)) best = { w, h };
+        }
+        offset += 2 + len;
+      }
+      return best;
+    }
+    if (b0 === 0x89 && b1 === 0x50 && view.getUint32(12) === 0x49484452) {
+      return { w: view.getUint32(16), h: view.getUint32(20) };
+    }
+    return null;
+  }
+
   async function loadImageFile(file) {
     if (!file) throw new Error("NO PHOTO.");
-    if (file.size < 8000) throw new Error("PHOTO TOO THIN. USE THE INSTAGRAM FILE, NOT A SCREENSHOT CROP.");
-    if (file.size > 20 * 1024 * 1024) throw new Error("PHOTO OVER 20MB.");
+    if (file.size > FILE_CAP) throw new Error("PHOTO OVER 48MB. EXPORT A JPG.");
     const href = URL.createObjectURL(file);
     try {
-      const img = await new Promise((resolve, reject) => {
-        const el = new Image();
-        el.onload = () => resolve(el);
+      const el = new Image();
+      el.decoding = "async";
+      await new Promise((resolve, reject) => {
+        el.onload = () => resolve();
         el.onerror = () => reject(new Error("UNREADABLE PHOTO. USE JPG / PNG / WEBP."));
         el.src = href;
       });
-      return img;
+      if (el.decode) await el.decode().catch(() => {});
+      return el;
     } finally {
       URL.revokeObjectURL(href);
     }
   }
 
-  async function toJpeg(img, spec) {
-    const w = img.naturalWidth || img.width;
-    const h = img.naturalHeight || img.height;
-    const short = Math.min(w, h);
-    if (short < spec.minShort) {
-      throw new Error(`PHOTO TOO SMALL. ${w}×${h}. NEED ${spec.minShort}PX+ ON THE SHORT SIDE.`);
-    }
-    let sx = 0, sy = 0, sw = w, sh = h;
+  function canvasJpeg(paint, quality) {
+    const canvas = document.createElement("canvas");
+    paint(canvas);
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => {
+        canvas.width = 0;
+        canvas.height = 0;
+        resolve(blob);
+      }, "image/jpeg", quality);
+    });
+  }
+
+  async function encodeHd(source, spec, srcW, srcH) {
+    let sx = 0;
+    let sy = 0;
+    let sw = srcW;
+    let sh = srcH;
     if (spec.square) {
-      const s = Math.min(w, h);
-      sx = Math.floor((w - s) / 2);
-      sy = Math.floor((h - s) / 2);
+      const s = Math.min(srcW, srcH);
+      sx = Math.floor((srcW - s) / 2);
+      sy = Math.floor((srcH - s) / 2);
       sw = s;
       sh = s;
     }
@@ -362,34 +414,84 @@
     const long = Math.max(dw, dh);
     if (long > spec.maxEdge) {
       const k = spec.maxEdge / long;
-      dw = Math.round(dw * k);
-      dh = Math.round(dh * k);
+      dw = Math.max(1, Math.round(dw * k));
+      dh = Math.max(1, Math.round(dh * k));
     }
-    const canvas = document.createElement("canvas");
-    canvas.width = dw;
-    canvas.height = dh;
-    const ctx = canvas.getContext("2d");
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", spec.quality));
+    const paint = (canvas, w, h) => {
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d", { alpha: false });
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(source, sx, sy, sw, sh, 0, 0, w, h);
+    };
+    let quality = spec.quality;
+    let blob = await canvasJpeg((c) => paint(c, dw, dh), quality);
+    while (blob && blob.size > UPLOAD_BUDGET && quality > 0.72) {
+      quality -= 0.08;
+      blob = await canvasJpeg((c) => paint(c, dw, dh), quality);
+    }
+    let guard = 0;
+    while (blob && blob.size > UPLOAD_BUDGET && Math.min(dw, dh) > 32 && guard < 4) {
+      dw = Math.max(32, Math.round(dw * 0.82));
+      dh = Math.max(32, Math.round(dh * 0.82));
+      blob = await canvasJpeg((c) => paint(c, dw, dh), 0.86);
+      guard += 1;
+    }
     if (!blob) throw new Error("PHOTO FAILED.");
+    if (blob.size > 16 * 1024 * 1024) throw new Error("PHOTO TOO HEAVY. TRY A SMALLER EXPORT.");
     return blob;
   }
 
+  async function decodeForEncode(file, maxEdge) {
+    const head = await file.slice(0, 1024 * 1024).arrayBuffer();
+    const probed = probeRasterSize(head);
+    const bitmapOpts = { imageOrientation: "from-image", resizeQuality: "high" };
+    if (typeof createImageBitmap === "function" && probed) {
+      const long = Math.max(probed.w, probed.h);
+      const k = long > maxEdge ? maxEdge / long : 1;
+      try {
+        const bmp = await createImageBitmap(file, k < 1
+          ? { ...bitmapOpts, resizeWidth: Math.max(1, Math.round(probed.w * k)), resizeHeight: Math.max(1, Math.round(probed.h * k)) }
+          : bitmapOpts);
+        return { source: bmp, w: probed.w, h: probed.h, native: bmp };
+      } catch { /* fallback */ }
+    }
+    if (typeof createImageBitmap === "function") {
+      try {
+        const bmp = await createImageBitmap(file, bitmapOpts);
+        const w = bmp.width;
+        const h = bmp.height;
+        const long = Math.max(w, h);
+        if (long > maxEdge) {
+          const k = maxEdge / long;
+          const small = await createImageBitmap(bmp, {
+            resizeWidth: Math.max(1, Math.round(w * k)),
+            resizeHeight: Math.max(1, Math.round(h * k)),
+            resizeQuality: "high",
+          });
+          bmp.close();
+          return { source: small, w, h, native: small };
+        }
+        return { source: bmp, w, h, native: bmp };
+      } catch { /* Image */ }
+    }
+    const img = await loadImageFile(file);
+    return { source: img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height, native: null };
+  }
+
   const HD = {
-    pp: { minShort: 640, maxEdge: 1080, square: true, quality: 0.92 },
-    fit: { minShort: 1080, maxEdge: 2560, square: false, quality: 0.96 },
-    story: { minShort: 1080, maxEdge: 2560, square: false, quality: 0.96 },
-    item: { minShort: 700, maxEdge: 2200, square: false, quality: 0.96 },
-    news: { minShort: 1080, maxEdge: 4096, square: false, quality: 0.97, maxBytes: 12 * 1024 * 1024 },
+    pp: { maxEdge: 1080, square: true, quality: 0.92 },
+    fit: { maxEdge: 2560, square: false, quality: 0.96 },
+    story: { maxEdge: 2560, square: false, quality: 0.96 },
+    item: { maxEdge: 2200, square: false, quality: 0.96 },
+    news: { maxEdge: 4096, square: false, quality: 0.92 },
   };
 
-  function isRasterFile(file) {
+  function isJpegFile(file) {
     const type = (file.type || "").toLowerCase();
     const name = file.name || "";
-    return type.includes("jpeg") || type.includes("jpg") || type.includes("png") || type.includes("webp")
-      || /\.(jpe?g|png|webp)$/i.test(name);
+    return type.includes("jpeg") || type.includes("jpg") || /\.jpe?g$/i.test(name);
   }
 
   function photoExt(blob) {
@@ -400,20 +502,28 @@
   }
 
   async function pickHd(file, kind) {
-    const img = await loadImageFile(file);
+    if (!file) throw new Error("NO PHOTO.");
+    if (file.size > FILE_CAP) throw new Error("PHOTO OVER 48MB. EXPORT A JPG.");
     const spec = HD[kind];
-    const w = img.naturalWidth || img.width;
-    const h = img.naturalHeight || img.height;
-    const short = Math.min(w, h);
-    const long = Math.max(w, h);
-    if (short < spec.minShort) {
-      throw new Error(`PHOTO TOO SMALL. ${w}×${h}. NEED ${spec.minShort}PX+ ON THE SHORT SIDE.`);
-    }
-    const maxBytes = spec.maxBytes || 8 * 1024 * 1024;
-    if (!spec.square && isRasterFile(file) && long <= spec.maxEdge && file.size <= maxBytes) {
+    const head = await file.slice(0, 1024 * 1024).arrayBuffer();
+    const probed = probeRasterSize(head);
+    if (!spec.square && isJpegFile(file) && probed && Math.max(probed.w, probed.h) <= spec.maxEdge && file.size <= UPLOAD_BUDGET) {
       return file;
     }
-    return toJpeg(img, spec);
+    if (file.size > 6 * 1024 * 1024 || (probed && Math.max(probed.w, probed.h) > spec.maxEdge)) {
+      snack("COMPRESSING PHOTO…");
+    }
+    const decoded = await decodeForEncode(file, spec.maxEdge);
+    try {
+      const srcW = decoded.source.naturalWidth || decoded.source.width;
+      const srcH = decoded.source.naturalHeight || decoded.source.height;
+      if (!srcW || !srcH) throw new Error("UNREADABLE PHOTO. USE JPG / PNG / WEBP.");
+      return await encodeHd(decoded.source, spec, srcW, srcH);
+    } finally {
+      if (decoded.native && typeof decoded.native.close === "function") {
+        try { decoded.native.close(); } catch { /* already closed */ }
+      }
+    }
   }
 
   function previewUrl(blob) {
@@ -448,6 +558,7 @@
     } catch {
       let q = sb.from(tableName).select("*").limit(100);
       if (filter.artist_id) q = q.eq("artist_id", filter.artist_id);
+      else if (filter.guest_artist_id) q = q.eq("guest_artist_id", filter.guest_artist_id);
       else if (filter.outfit_id) q = q.eq("outfit_id", filter.outfit_id);
       else if (filter.archive_id) q = q.eq("archive_id", filter.archive_id);
       else if (Array.isArray(filter.outfit_ids) && filter.outfit_ids.length) q = q.in("outfit_id", filter.outfit_ids);
@@ -721,6 +832,13 @@
     if (vault === true || vault === 1 || vault === "t" || vault === "1" || String(vault).toLowerCase() === "true") return "VAULT";
     return isStoryPost(row) ? "STORY" : "FIT CHECK";
   }
+  function guestIdOf(row) {
+    return String(row?.guest_artist_id || row?.guestArtistId || "").trim();
+  }
+  function artistById(id) {
+    if (!id) return null;
+    return artists.find((a) => a.id === id) || null;
+  }
 
   function formatItemPrice(raw) {
     if (raw == null || raw === "") return "";
@@ -770,6 +888,16 @@
     msg.textContent = "LOADING…";
     try {
       const outfits = await loadFiltered("outfits", { artist_id: selected.id });
+      try {
+        const asGuest = await loadFiltered("outfits", { guest_artist_id: selected.id });
+        const seen = new Set(outfits.map((o) => o.id).filter(Boolean));
+        for (const row of asGuest) {
+          if (row?.id && !seen.has(row.id)) {
+            seen.add(row.id);
+            outfits.push(row);
+          }
+        }
+      } catch {}
       outfits.sort((a, b) => postStamp(b) - postStamp(a));
       artistPosts = outfits.filter((o) => postKind(o) !== "VAULT");
       const ids = outfits.map((o) => o.id).filter(Boolean);
@@ -822,9 +950,12 @@
       const n = document.createElement("div");
       n.className = "n";
       const count = (itemsByOutfit[post.id] || []).length;
+      const guest = artistById(guestIdOf(post));
       n.textContent = isStoryPost(post)
         ? "STORY"
-        : `${count} CARD${count === 1 ? "" : "S"} · ${photosFromOutfit(post).length} PHOTO`;
+        : guest
+          ? `COUPLE · ${guest.name} · ${count} CARD${count === 1 ? "" : "S"}`
+          : `${count} CARD${count === 1 ? "" : "S"} · ${photosFromOutfit(post).length} PHOTO`;
       meta.append(kind, when, n);
       const edit = document.createElement("span");
       edit.className = "edit";
@@ -978,7 +1109,10 @@
       document.getElementById("photo-hint").textContent = "Swipe up to 3. Tap a frame to replace. Next keeps product cards.";
       document.getElementById("photo-next").textContent = "Next";
     }
+    guestArtist = artistById(guestIdOf(post));
+    coupleOpen = false;
     paintPhotoScroller();
+    paintCouple();
     showScreen("photo");
   }
 
@@ -1001,21 +1135,106 @@
 
   function resetCompose() {
     editingOutfit = null;
+    guestArtist = null;
+    coupleOpen = false;
     photos.forEach((p) => forgetPreview(p.preview));
     photos = [];
     photoSlide = 0;
     photoPick = -1;
     cardIndex = 0;
     cards = emptyCards();
+    const q = document.getElementById("couple-q");
+    if (q) q.value = "";
+  }
+
+  function paintCoupleHits() {
+    const host = document.getElementById("couple-hits");
+    if (!host) return;
+    host.replaceChildren();
+    const q = String(document.getElementById("couple-q")?.value || "").trim().toUpperCase();
+    const hits = artists.filter((a) => {
+      if (!a.id || a.id === selected?.id) return false;
+      if (guestArtist?.id && a.id === guestArtist.id) return false;
+      if (!q) return true;
+      return String(a.name || "").toUpperCase().includes(q);
+    }).slice(0, 12);
+    if (!hits.length) {
+      const empty = document.createElement("p");
+      empty.className = "muted";
+      empty.style.padding = "12px";
+      empty.textContent = q ? "NO MATCH." : "TYPE A STAR NAME.";
+      host.appendChild(empty);
+      return;
+    }
+    hits.forEach((a) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "couple-hit";
+      const av = document.createElement("div");
+      av.className = "avatar";
+      paintAvatar(av, a, 36);
+      const n = document.createElement("span");
+      n.textContent = a.name || "";
+      b.append(av, n);
+      b.addEventListener("click", () => {
+        guestArtist = a;
+        coupleOpen = false;
+        document.getElementById("couple-q").value = "";
+        paintCouple();
+      });
+      host.appendChild(b);
+    });
+  }
+
+  function paintCouple() {
+    const box = document.getElementById("couple-box");
+    const on = document.getElementById("couple-on");
+    const add = document.getElementById("couple-add");
+    const search = document.getElementById("couple-search");
+    if (!box || !on || !add || !search) return;
+    const show = mode === "fit";
+    box.classList.toggle("hidden", !show);
+    if (!show) return;
+    on.replaceChildren();
+    if (guestArtist) {
+      on.classList.remove("hidden");
+      add.classList.add("hidden");
+      search.classList.add("hidden");
+      const av = document.createElement("div");
+      av.className = "avatar";
+      paintAvatar(av, guestArtist, 44);
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.innerHTML = `<div class="kind">IN FRAME</div><div class="name"></div>`;
+      meta.querySelector(".name").textContent = guestArtist.name || "";
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "btn sq";
+      x.setAttribute("aria-label", "Remove second star");
+      x.textContent = "X";
+      x.addEventListener("click", () => {
+        guestArtist = null;
+        coupleOpen = false;
+        paintCouple();
+      });
+      on.append(av, meta, x);
+      return;
+    }
+    on.classList.add("hidden");
+    add.classList.remove("hidden");
+    add.textContent = coupleOpen ? "Close" : "Add second star";
+    search.classList.toggle("hidden", !coupleOpen);
+    if (coupleOpen) paintCoupleHits();
   }
 
   function goFit() {
     mode = "fit";
     resetCompose();
     document.getElementById("photo-step").textContent = "Fit check · photos";
-    document.getElementById("photo-hint").textContent = "Up to 3. Swipe like Instagram. 1080px min.";
+    document.getElementById("photo-hint").textContent = "Up to 3. Swipe like Instagram. Centered on the plate.";
     document.getElementById("photo-next").textContent = "Next";
     paintPhotoScroller();
+    paintCouple();
     showScreen("photo");
   }
 
@@ -1023,9 +1242,10 @@
     mode = "story";
     resetCompose();
     document.getElementById("photo-step").textContent = "Story · photo";
-    document.getElementById("photo-hint").textContent = "One frame. 1080px min. 9:16 like Instagram Stories.";
+    document.getElementById("photo-hint").textContent = "One frame. 9:16 like Instagram Stories. Centered on the plate.";
     document.getElementById("photo-next").textContent = "Post story";
     paintPhotoScroller();
+    paintCouple();
     showScreen("photo");
   }
 
@@ -1162,19 +1382,25 @@
     if (!urls.length) throw new Error("ADD AN HD PHOTO FIRST.");
     const imageUrl = urls[0];
     const imageUrls = urls;
+    const guestId = kind === "fit" && guestArtist?.id && guestArtist.id !== selected.id ? guestArtist.id : null;
     if (editingOutfit?.id) {
-      await patchLoose("outfits", editingOutfit.id, { image_url: imageUrl, image_urls: imageUrls }, ["image_urls"]);
+      await patchLoose("outfits", editingOutfit.id, {
+        image_url: imageUrl,
+        image_urls: imageUrls,
+        guest_artist_id: guestId,
+      }, ["image_urls", "guest_artist_id"]);
       if (kind === "fit") await saveOutfitItems(editingOutfit.id);
       return editingOutfit;
     }
     const outfit = await insertLoose("outfits", {
       artist_id: selected.id,
+      guest_artist_id: guestId,
       image_url: imageUrl,
       image_urls: imageUrls,
       title: kind === "story" ? "STORY" : "FIT CHECK",
       date: new Date().toISOString(),
       is_vault: false,
-    }, ["title", "date", "is_vault", "image_urls"]);
+    }, ["title", "date", "is_vault", "image_urls", "guest_artist_id"]);
     if (kind === "fit") await saveOutfitItems(outfit.id);
     return outfit;
   }
@@ -1248,7 +1474,7 @@
       return;
     }
     if (!editingId && !ppBlob) {
-      snack("STAR PP REQUIRED. 640PX+ SQUARE CROP.", true);
+      snack("STAR PP REQUIRED.", true);
       return;
     }
     try {
@@ -1317,6 +1543,12 @@
 
   document.getElementById("go-fit").addEventListener("click", goFit);
   document.getElementById("go-story").addEventListener("click", goStory);
+  document.getElementById("couple-add").addEventListener("click", () => {
+    coupleOpen = !coupleOpen;
+    paintCouple();
+    if (coupleOpen) document.getElementById("couple-q")?.focus();
+  });
+  document.getElementById("couple-q").addEventListener("input", paintCoupleHits);
 
   document.getElementById("fit-file").addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
@@ -1554,6 +1786,47 @@
     paintNewsScroller();
   }
 
+  function paintNewsPhotoMeta() {
+    const el = document.getElementById("news-photo-meta");
+    if (el) el.textContent = `PHOTOS ${newsPhotos.length} / ${MAX_NEWS_PHOTOS}`;
+    const btn = document.getElementById("news-add-photos");
+    if (btn) btn.disabled = newsPhotos.length >= MAX_NEWS_PHOTOS;
+  }
+
+  async function ingestNewsFiles(fileList) {
+    const files = [...(fileList || [])].filter(Boolean);
+    if (!files.length) return;
+    let added = 0;
+    let firstError = "";
+    for (const file of files) {
+      const replacing = newsPick >= 0 && newsPick < newsPhotos.length && added === 0;
+      if (!replacing && newsPhotos.length >= MAX_NEWS_PHOTOS) {
+        snack(`MAX ${MAX_NEWS_PHOTOS} PHOTOS.`, true);
+        break;
+      }
+      try {
+        const blob = await pickHd(file, "news");
+        const href = previewUrl(blob);
+        if (replacing) {
+          forgetPreview(newsPhotos[newsPick].preview);
+          newsPhotos[newsPick] = { blob, preview: href, url: "" };
+          newsSlide = newsPick;
+          newsPick = -1;
+        } else {
+          newsPhotos.push({ blob, preview: href, url: "" });
+          newsSlide = newsPhotos.length - 1;
+        }
+        added += 1;
+      } catch (err) {
+        if (!firstError) firstError = err.message || String(err);
+      }
+    }
+    newsPick = -1;
+    paintNewsScroller();
+    if (firstError) snack(firstError, true);
+    else if (added > 1) snack(`${added} PHOTOS ADDED.`);
+  }
+
   function paintNewsScroller() {
     bindNewsScroller();
     const scroller = document.getElementById("news-scroller");
@@ -1587,6 +1860,7 @@
       add.addEventListener("click", () => openNewsPicker(-1));
       scroller.appendChild(add);
     }
+    paintNewsPhotoMeta();
     paintNewsDots();
     requestAnimationFrame(() => {
       const w = scroller.clientWidth || 1;
@@ -2707,30 +2981,12 @@
   });
   document.getElementById("news-add").addEventListener("click", () => openNewsEdit(null));
   document.getElementById("news-save").addEventListener("click", saveNews);
+  document.getElementById("news-add-photos").addEventListener("click", () => openNewsPicker(-1));
   document.getElementById("news-file").addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
+    const list = e.target.files;
     e.target.value = "";
-    if (!file) return;
-    try {
-      const blob = await pickHd(file, "news");
-      const href = previewUrl(blob);
-      if (newsPick >= 0 && newsPick < newsPhotos.length) {
-        forgetPreview(newsPhotos[newsPick].preview);
-        newsPhotos[newsPick] = { blob, preview: href, url: "" };
-        newsSlide = newsPick;
-      } else if (newsPhotos.length < MAX_NEWS_PHOTOS) {
-        newsPhotos.push({ blob, preview: href, url: "" });
-        newsSlide = newsPhotos.length - 1;
-      } else {
-        snack(`MAX ${MAX_NEWS_PHOTOS} PHOTOS.`, true);
-        URL.revokeObjectURL(href);
-        return;
-      }
-      newsPick = -1;
-      paintNewsScroller();
-    } catch (err) {
-      snack(err.message || String(err), true);
-    }
+    if (!list?.length) return;
+    await ingestNewsFiles(list);
   });
   ["news-pname", "news-pdate", "news-purl", "news-pnote", "news-sku"].forEach((id) => {
     document.getElementById(id).addEventListener("input", paintNewsPlate);

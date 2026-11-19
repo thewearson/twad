@@ -303,6 +303,8 @@ async function restResponse(request, env) {
     const clauses = ["select=*", "limit=100"];
     if (filter.artist_id) {
       clauses.push(`artist_id=eq.${encodeURIComponent(String(filter.artist_id))}`);
+    } else if (filter.guest_artist_id) {
+      clauses.push(`guest_artist_id=eq.${encodeURIComponent(String(filter.guest_artist_id))}`);
     } else if (filter.outfit_id) {
       clauses.push(`outfit_id=eq.${encodeURIComponent(String(filter.outfit_id))}`);
     } else if (Array.isArray(filter.outfit_ids) && filter.outfit_ids.length) {

@@ -329,62 +329,6 @@
   const FILE_CAP = 48 * 1024 * 1024;
   const UPLOAD_BUDGET = 4.5 * 1024 * 1024;
 
-  function probeRasterSize(buf) {
-    if (!buf || buf.byteLength < 24) return null;
-    const view = new DataView(buf);
-    const b0 = view.getUint8(0);
-    const b1 = view.getUint8(1);
-    if (b0 === 0xff && b1 === 0xd8) {
-      let offset = 2;
-      let best = null;
-      while (offset + 8 < view.byteLength) {
-        if (view.getUint8(offset) !== 0xff) {
-          offset += 1;
-          continue;
-        }
-        const marker = view.getUint8(offset + 1);
-        if (marker === 0xff) { offset += 1; continue; }
-        if (marker === 0xd9 || marker === 0xda) break;
-        if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
-          offset += 2;
-          continue;
-        }
-        const len = view.getUint16(offset + 2);
-        if (len < 2) break;
-        if (marker >= 0xc0 && marker <= 0xc3) {
-          const h = view.getUint16(offset + 5);
-          const w = view.getUint16(offset + 7);
-          if (w >= 32 && h >= 32 && (!best || w * h > best.w * best.h)) best = { w, h };
-        }
-        offset += 2 + len;
-      }
-      return best;
-    }
-    if (b0 === 0x89 && b1 === 0x50 && view.getUint32(12) === 0x49484452) {
-      return { w: view.getUint32(16), h: view.getUint32(20) };
-    }
-    return null;
-  }
-
-  async function loadImageFile(file) {
-    if (!file) throw new Error("NO PHOTO.");
-    if (file.size > FILE_CAP) throw new Error("PHOTO OVER 48MB. EXPORT A JPG.");
-    const href = URL.createObjectURL(file);
-    try {
-      const el = new Image();
-      el.decoding = "async";
-      await new Promise((resolve, reject) => {
-        el.onload = () => resolve();
-        el.onerror = () => reject(new Error("UNREADABLE PHOTO. USE JPG / PNG / WEBP."));
-        el.src = href;
-      });
-      if (el.decode) await el.decode().catch(() => {});
-      return el;
-    } finally {
-      URL.revokeObjectURL(href);
-    }
-  }
-
   function canvasJpeg(paint, quality) {
     const canvas = document.createElement("canvas");
     paint(canvas);
@@ -443,43 +387,6 @@
     return blob;
   }
 
-  async function decodeForEncode(file, maxEdge) {
-    const head = await file.slice(0, 1024 * 1024).arrayBuffer();
-    const probed = probeRasterSize(head);
-    const bitmapOpts = { imageOrientation: "from-image", resizeQuality: "high" };
-    if (typeof createImageBitmap === "function" && probed) {
-      const long = Math.max(probed.w, probed.h);
-      const k = long > maxEdge ? maxEdge / long : 1;
-      try {
-        const bmp = await createImageBitmap(file, k < 1
-          ? { ...bitmapOpts, resizeWidth: Math.max(1, Math.round(probed.w * k)), resizeHeight: Math.max(1, Math.round(probed.h * k)) }
-          : bitmapOpts);
-        return { source: bmp, w: probed.w, h: probed.h, native: bmp };
-      } catch { /* fallback */ }
-    }
-    if (typeof createImageBitmap === "function") {
-      try {
-        const bmp = await createImageBitmap(file, bitmapOpts);
-        const w = bmp.width;
-        const h = bmp.height;
-        const long = Math.max(w, h);
-        if (long > maxEdge) {
-          const k = maxEdge / long;
-          const small = await createImageBitmap(bmp, {
-            resizeWidth: Math.max(1, Math.round(w * k)),
-            resizeHeight: Math.max(1, Math.round(h * k)),
-            resizeQuality: "high",
-          });
-          bmp.close();
-          return { source: small, w, h, native: small };
-        }
-        return { source: bmp, w, h, native: bmp };
-      } catch { /* Image */ }
-    }
-    const img = await loadImageFile(file);
-    return { source: img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height, native: null };
-  }
-
   const HD = {
     pp: { maxEdge: 1080, square: true, quality: 0.92 },
     fit: { maxEdge: 2560, square: false, quality: 0.96 },
@@ -505,24 +412,35 @@
     if (!file) throw new Error("NO PHOTO.");
     if (file.size > FILE_CAP) throw new Error("PHOTO OVER 48MB. EXPORT A JPG.");
     const spec = HD[kind];
-    const head = await file.slice(0, 1024 * 1024).arrayBuffer();
-    const probed = probeRasterSize(head);
-    if (!spec.square && isJpegFile(file) && probed && Math.max(probed.w, probed.h) <= spec.maxEdge && file.size <= UPLOAD_BUDGET) {
-      return file;
-    }
-    if (file.size > 6 * 1024 * 1024 || (probed && Math.max(probed.w, probed.h) > spec.maxEdge)) {
-      snack("COMPRESSING PHOTO…");
-    }
-    const decoded = await decodeForEncode(file, spec.maxEdge);
+    if (!spec.square && isJpegFile(file) && file.size <= UPLOAD_BUDGET) return file;
+    if (file.size > 6 * 1024 * 1024) snack("COMPRESSING PHOTO…");
+    const href = URL.createObjectURL(file);
     try {
-      const srcW = decoded.source.naturalWidth || decoded.source.width;
-      const srcH = decoded.source.naturalHeight || decoded.source.height;
-      if (!srcW || !srcH) throw new Error("UNREADABLE PHOTO. USE JPG / PNG / WEBP.");
-      return await encodeHd(decoded.source, spec, srcW, srcH);
-    } finally {
-      if (decoded.native && typeof decoded.native.close === "function") {
-        try { decoded.native.close(); } catch { /* already closed */ }
+      const img = new Image();
+      img.decoding = "async";
+      await new Promise((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("UNREADABLE PHOTO. USE JPG / PNG / WEBP."));
+        img.src = href;
+      });
+      if (img.decode) await img.decode().catch(() => {});
+      const srcW = img.naturalWidth || img.width;
+      const srcH = img.naturalHeight || img.height;
+      if (!srcW || !srcH) {
+        if (file.size <= 16 * 1024 * 1024) return file;
+        throw new Error("UNREADABLE PHOTO. USE JPG / PNG / WEBP.");
       }
+      try {
+        return await encodeHd(img, spec, srcW, srcH);
+      } catch {
+        if (file.size <= 16 * 1024 * 1024) return file;
+        throw new Error("PHOTO FAILED.");
+      }
+    } catch (err) {
+      if (file.size <= 16 * 1024 * 1024) return file;
+      throw err;
+    } finally {
+      URL.revokeObjectURL(href);
     }
   }
 
@@ -1804,19 +1722,29 @@
         snack(`MAX ${MAX_NEWS_PHOTOS} PHOTOS.`, true);
         break;
       }
+      const instant = previewUrl(file);
+      let slot;
+      if (replacing) {
+        forgetPreview(newsPhotos[newsPick].preview);
+        slot = { blob: file, preview: instant, url: "" };
+        newsPhotos[newsPick] = slot;
+        newsSlide = newsPick;
+        newsPick = -1;
+      } else {
+        slot = { blob: file, preview: instant, url: "" };
+        newsPhotos.push(slot);
+        newsSlide = newsPhotos.length - 1;
+      }
+      added += 1;
+      paintNewsScroller();
       try {
         const blob = await pickHd(file, "news");
-        const href = previewUrl(blob);
-        if (replacing) {
-          forgetPreview(newsPhotos[newsPick].preview);
-          newsPhotos[newsPick] = { blob, preview: href, url: "" };
-          newsSlide = newsPick;
-          newsPick = -1;
-        } else {
-          newsPhotos.push({ blob, preview: href, url: "" });
-          newsSlide = newsPhotos.length - 1;
+        if (blob && blob !== file) {
+          forgetPreview(slot.preview);
+          slot.blob = blob;
+          slot.preview = previewUrl(blob);
+          paintNewsScroller();
         }
-        added += 1;
       } catch (err) {
         if (!firstError) firstError = err.message || String(err);
       }

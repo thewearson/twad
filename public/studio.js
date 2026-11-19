@@ -329,19 +329,66 @@
   const FILE_CAP = 48 * 1024 * 1024;
   const UPLOAD_BUDGET = 4.5 * 1024 * 1024;
 
-  function canvasJpeg(paint, quality) {
+  function canvasBlob(paint, type, quality) {
     const canvas = document.createElement("canvas");
     paint(canvas);
     return new Promise((resolve) => {
-      canvas.toBlob((blob) => {
+      const finish = (blob) => {
         canvas.width = 0;
         canvas.height = 0;
-        resolve(blob);
-      }, "image/jpeg", quality);
+        resolve(blob || null);
+      };
+      try {
+        if (type === "image/png") canvas.toBlob(finish, "image/png");
+        else canvas.toBlob(finish, type, quality);
+      } catch {
+        finish(null);
+      }
     });
   }
 
-  async function encodeHd(source, spec, srcW, srcH) {
+  function imageIsCutout(img) {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (!w || !h) return false;
+    const sw = Math.min(96, w);
+    const sh = Math.min(96, h);
+    const canvas = document.createElement("canvas");
+    canvas.width = sw;
+    canvas.height = sh;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true, alpha: true });
+    if (!ctx) return false;
+    try {
+      ctx.clearRect(0, 0, sw, sh);
+      ctx.drawImage(img, 0, 0, sw, sh);
+      const data = ctx.getImageData(0, 0, sw, sh).data;
+      let clear = 0;
+      const n = sw * sh;
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] < 245) clear += 1;
+      }
+      return clear > n * 0.015;
+    } catch {
+      return false;
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  }
+
+  function blobLooksCutout(blob) {
+    if (!blob) return false;
+    if (isJpegFile(blob)) return false;
+    const t = `${blob.type || ""} ${blob.name || ""}`;
+    return /png|webp/i.test(t);
+  }
+
+  function urlLooksCutout(href) {
+    return /\.(png|webp)(?:$|\?|#)/i.test(String(href || ""));
+  }
+
+  async function encodeHd(source, spec, srcW, srcH, opt = {}) {
+    const keepAlpha = !!opt.keepAlpha;
     let sx = 0;
     let sy = 0;
     let sw = srcW;
@@ -364,24 +411,44 @@
     const paint = (canvas, w, h) => {
       canvas.width = w;
       canvas.height = h;
-      const ctx = canvas.getContext("2d", { alpha: false });
+      const ctx = canvas.getContext("2d", { alpha: keepAlpha });
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "high";
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, w, h);
+      if (keepAlpha) ctx.clearRect(0, 0, w, h);
+      else {
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, w, h);
+      }
       ctx.drawImage(source, sx, sy, sw, sh, 0, 0, w, h);
     };
+    if (keepAlpha) {
+      let blob = await canvasBlob((c) => paint(c, dw, dh), "image/webp", 0.92);
+      if (!blob || !String(blob.type || "").includes("webp")) {
+        blob = await canvasBlob((c) => paint(c, dw, dh), "image/png");
+      }
+      let guard = 0;
+      while (blob && blob.size > UPLOAD_BUDGET && Math.min(dw, dh) > 32 && guard < 6) {
+        dw = Math.max(32, Math.round(dw * 0.82));
+        dh = Math.max(32, Math.round(dh * 0.82));
+        const type = String(blob.type || "").includes("webp") ? "image/webp" : "image/png";
+        blob = await canvasBlob((c) => paint(c, dw, dh), type, 0.86);
+        guard += 1;
+      }
+      if (!blob) throw new Error("PHOTO FAILED.");
+      if (blob.size > 16 * 1024 * 1024) throw new Error("PHOTO TOO HEAVY. TRY A SMALLER EXPORT.");
+      return blob;
+    }
     let quality = spec.quality;
-    let blob = await canvasJpeg((c) => paint(c, dw, dh), quality);
+    let blob = await canvasBlob((c) => paint(c, dw, dh), "image/jpeg", quality);
     while (blob && blob.size > UPLOAD_BUDGET && quality > 0.72) {
       quality -= 0.08;
-      blob = await canvasJpeg((c) => paint(c, dw, dh), quality);
+      blob = await canvasBlob((c) => paint(c, dw, dh), "image/jpeg", quality);
     }
     let guard = 0;
     while (blob && blob.size > UPLOAD_BUDGET && Math.min(dw, dh) > 32 && guard < 4) {
       dw = Math.max(32, Math.round(dw * 0.82));
       dh = Math.max(32, Math.round(dh * 0.82));
-      blob = await canvasJpeg((c) => paint(c, dw, dh), 0.86);
+      blob = await canvasBlob((c) => paint(c, dw, dh), "image/jpeg", 0.86);
       guard += 1;
     }
     if (!blob) throw new Error("PHOTO FAILED.");
@@ -422,7 +489,6 @@
     if (!file) throw new Error("NO PHOTO.");
     if (file.size > FILE_CAP) throw new Error("PHOTO OVER 48MB. EXPORT A JPG.");
     const spec = HD[kind];
-    if (!spec.square && isPassFile(file) && file.size <= UPLOAD_BUDGET) return file;
     if (file.size > 6 * 1024 * 1024) snack("COMPRESSING PHOTO…");
     const href = URL.createObjectURL(file);
     try {
@@ -440,8 +506,13 @@
         if (file.size <= 16 * 1024 * 1024) return file;
         throw new Error("UNREADABLE PHOTO. USE JPG / PNG / WEBP.");
       }
+      const cutout = kind === "news" && imageIsCutout(img);
+      if (!spec.square && file.size <= UPLOAD_BUDGET) {
+        if (isJpegFile(file)) return file;
+        if (cutout) return file;
+      }
       try {
-        return await encodeHd(img, spec, srcW, srcH);
+        return await encodeHd(img, spec, srcW, srcH, { keepAlpha: cutout });
       } catch {
         if (file.size <= 16 * 1024 * 1024) return file;
         throw new Error("PHOTO FAILED.");
@@ -1751,12 +1822,12 @@
       let slot;
       if (replacing) {
         forgetPreview(newsPhotos[newsPick].preview);
-        slot = { blob: file, preview: instant, url: "" };
+        slot = { blob: file, preview: instant, url: "", cutout: blobLooksCutout(file) };
         newsPhotos[newsPick] = slot;
         newsSlide = newsPick;
         newsPick = -1;
       } else {
-        slot = { blob: file, preview: instant, url: "" };
+        slot = { blob: file, preview: instant, url: "", cutout: blobLooksCutout(file) };
         newsPhotos.push(slot);
         newsSlide = newsPhotos.length - 1;
       }
@@ -1764,12 +1835,13 @@
       paintNewsScroller();
       try {
         const blob = await pickHd(file, "news");
+        slot.cutout = blobLooksCutout(blob || file);
         if (blob && blob !== file) {
           forgetPreview(slot.preview);
           slot.blob = blob;
           slot.preview = previewUrl(blob);
-          paintNewsScroller();
         }
+        paintNewsScroller();
       } catch (err) {
         if (!firstError) firstError = err.message || String(err);
       }
@@ -1788,10 +1860,19 @@
       const slide = document.createElement("div");
       slide.className = "photo-slide";
       const frame = document.createElement("div");
-      frame.className = "photo-frame";
+      const cutout = p.cutout === true || (p.cutout !== false && urlLooksCutout(p.url || p.preview || ""));
+      frame.className = "photo-frame" + (cutout ? " is-cutout" : " is-fill");
       const img = document.createElement("img");
       img.src = p.preview || p.url || "";
       img.alt = "";
+      img.addEventListener("load", () => {
+        const src = img.currentSrc || img.src || "";
+        const next = src.startsWith("blob:") || src.startsWith("data:")
+          ? imageIsCutout(img)
+          : urlLooksCutout(src);
+        p.cutout = next;
+        frame.className = "photo-frame" + (next ? " is-cutout" : " is-fill");
+      }, { once: true });
       frame.appendChild(img);
       slide.appendChild(frame);
       const x = document.createElement("button");
@@ -1951,7 +2032,7 @@
       document.getElementById("news-purl").value = row.buy_url || "";
       document.getElementById("news-pnote").value = row.buy_note || "";
       document.getElementById("news-sku").value = row.sku || "";
-      newsPhotos = newsUrlList(row).map((href) => ({ blob: null, preview: href, url: href }));
+      newsPhotos = newsUrlList(row).map((href) => ({ blob: null, preview: href, url: href, cutout: urlLooksCutout(href) }));
       document.getElementById("news-step").textContent = "Edit dispatch";
       document.getElementById("news-save").textContent = "Save dispatch";
     }

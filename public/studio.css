@@ -571,9 +571,12 @@ label {
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   object-position: center;
   background: var(--paper);
+}
+.photo-frame.is-cutout img {
+  object-fit: contain;
 }
 .photo-scroller.plate {
   background: var(--paper);

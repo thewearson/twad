@@ -367,6 +367,8 @@
       const ctx = canvas.getContext("2d", { alpha: false });
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "high";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
       ctx.drawImage(source, sx, sy, sw, sh, 0, 0, w, h);
     };
     let quality = spec.quality;
@@ -401,6 +403,14 @@
     return type.includes("jpeg") || type.includes("jpg") || /\.jpe?g$/i.test(name);
   }
 
+  function isPassFile(file) {
+    const type = (file.type || "").toLowerCase();
+    const name = file.name || "";
+    return isJpegFile(file)
+      || type.includes("png") || /\.png$/i.test(name)
+      || type.includes("webp") || /\.webp$/i.test(name);
+  }
+
   function photoExt(blob) {
     const t = (blob.type || "").toLowerCase();
     if (t.includes("png")) return "png";
@@ -412,7 +422,7 @@
     if (!file) throw new Error("NO PHOTO.");
     if (file.size > FILE_CAP) throw new Error("PHOTO OVER 48MB. EXPORT A JPG.");
     const spec = HD[kind];
-    if (!spec.square && isJpegFile(file) && file.size <= UPLOAD_BUDGET) return file;
+    if (!spec.square && isPassFile(file) && file.size <= UPLOAD_BUDGET) return file;
     if (file.size > 6 * 1024 * 1024) snack("COMPRESSING PHOTO…");
     const href = URL.createObjectURL(file);
     try {

@@ -579,7 +579,7 @@ label {
   max-height: 100%;
   object-fit: contain;
   object-position: center;
-  background: transparent;
+  background: var(--paper);
 }
 .photo-scroller.plate {
   background: var(--paper);

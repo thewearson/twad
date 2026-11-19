@@ -448,6 +448,16 @@
     return blob ? URL.createObjectURL(blob) : "";
   }
 
+  async function pinFiles(fileList) {
+    const out = [];
+    for (const file of fileList || []) {
+      if (!file) continue;
+      const buf = await file.arrayBuffer();
+      out.push(new File([buf], file.name || "photo.jpg", { type: file.type || "image/jpeg", lastModified: file.lastModified || Date.now() }));
+    }
+    return out;
+  }
+
   async function uploadJpeg(path, blob) {
     const res = await fetch(`/api/upload?path=${encodeURIComponent(path)}`, {
       method: "POST",
@@ -1446,7 +1456,7 @@
   });
   document.getElementById("star-save").addEventListener("click", saveStar);
   document.getElementById("pp-file").addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
+    const [file] = await pinFiles(e.target.files);
     e.target.value = "";
     if (!file) return;
     try {
@@ -1469,7 +1479,7 @@
   document.getElementById("couple-q").addEventListener("input", paintCoupleHits);
 
   document.getElementById("fit-file").addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
+    const [file] = await pinFiles(e.target.files);
     e.target.value = "";
     if (!file) return;
     try {
@@ -1530,7 +1540,7 @@
   });
 
   document.getElementById("card-file").addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
+    const [file] = await pinFiles(e.target.files);
     e.target.value = "";
     if (!file) return;
     try {
@@ -1708,7 +1718,12 @@
     const el = document.getElementById("news-photo-meta");
     if (el) el.textContent = `PHOTOS ${newsPhotos.length} / ${MAX_NEWS_PHOTOS}`;
     const btn = document.getElementById("news-add-photos");
-    if (btn) btn.disabled = newsPhotos.length >= MAX_NEWS_PHOTOS;
+    if (btn) {
+      const full = newsPhotos.length >= MAX_NEWS_PHOTOS;
+      btn.setAttribute("aria-disabled", full ? "true" : "false");
+      btn.style.pointerEvents = full ? "none" : "";
+      btn.style.opacity = full ? "0.38" : "";
+    }
   }
 
   async function ingestNewsFiles(fileList) {
@@ -1762,10 +1777,13 @@
     newsPhotos.forEach((p, i) => {
       const slide = document.createElement("div");
       slide.className = "photo-slide";
+      const frame = document.createElement("div");
+      frame.className = "photo-frame";
       const img = document.createElement("img");
       img.src = p.preview || p.url || "";
       img.alt = "";
-      slide.appendChild(img);
+      frame.appendChild(img);
+      slide.appendChild(frame);
       const x = document.createElement("button");
       x.type = "button";
       x.className = "photo-x";
@@ -1781,11 +1799,11 @@
       scroller.appendChild(slide);
     });
     if (newsPhotos.length < MAX_NEWS_PHOTOS) {
-      const add = document.createElement("button");
-      add.type = "button";
+      const add = document.createElement("label");
       add.className = "photo-slide add";
+      add.setAttribute("for", "news-file");
       add.innerHTML = `<div class="plus">+</div><span>${newsPhotos.length ? `Add ${newsPhotos.length + 1} / ${MAX_NEWS_PHOTOS}` : "Add photo"}</span>`;
-      add.addEventListener("click", () => openNewsPicker(-1));
+      add.addEventListener("click", () => { newsPick = -1; });
       scroller.appendChild(add);
     }
     paintNewsPhotoMeta();
@@ -2875,7 +2893,7 @@
     showScreen("card");
   });
   document.getElementById("archive-file").addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
+    const [file] = await pinFiles(e.target.files);
     e.target.value = "";
     if (!file) return;
     try {
@@ -2909,12 +2927,11 @@
   });
   document.getElementById("news-add").addEventListener("click", () => openNewsEdit(null));
   document.getElementById("news-save").addEventListener("click", saveNews);
-  document.getElementById("news-add-photos").addEventListener("click", () => openNewsPicker(-1));
   document.getElementById("news-file").addEventListener("change", async (e) => {
-    const list = e.target.files;
+    const files = await pinFiles(e.target.files);
     e.target.value = "";
-    if (!list?.length) return;
-    await ingestNewsFiles(list);
+    if (!files.length) return;
+    await ingestNewsFiles(files);
   });
   ["news-pname", "news-pdate", "news-purl", "news-pnote", "news-sku"].forEach((id) => {
     document.getElementById(id).addEventListener("input", paintNewsPlate);

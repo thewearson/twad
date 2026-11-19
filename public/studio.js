@@ -1463,7 +1463,7 @@
         return;
       } catch (error) {
         const msg = error.message || "";
-        const hit = keys.find((k) => msg.toLowerCase().includes(k.toLowerCase()));
+        const hit = keys.find((k) => optionalKeyInError(msg, k));
         if (!hit) throw error;
         delete patch[hit];
         keys = keys.filter((k) => k !== hit);
@@ -2077,7 +2077,7 @@
     msg.textContent = "SAVING…";
     try {
       const imageUrls = await collectNewsUrls();
-      const row = omitBlank({
+      const row = {
         category: newsCat,
         title,
         dek,
@@ -2090,9 +2090,9 @@
         buy_url: buyUrl,
         buy_note: buyNote,
         sku,
-      });
+      };
       if (editingNews?.id) {
-        await restWrite({ op: "update", table: "drip_news", id: editingNews.id, patch: row });
+        await patchLoose("drip_news", editingNews.id, row, NEWS_OPTIONAL);
         snack("DISPATCH SAVED. PULL TO REFRESH THE APP.");
       } else {
         await insertLoose("drip_news", row, NEWS_OPTIONAL);

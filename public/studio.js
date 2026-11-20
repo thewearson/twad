@@ -2004,6 +2004,25 @@
     }
   }
 
+  function paintDropEmails(emails) {
+    const list = document.getElementById("drop-email-list");
+    if (!list) return;
+    list.replaceChildren();
+    const rows = [...new Set((Array.isArray(emails) ? emails : []).map((e) => String(e || "").trim().toLowerCase()).filter(Boolean))].sort();
+    if (!rows.length) {
+      const empty = document.createElement("li");
+      empty.className = "is-empty";
+      empty.textContent = "NONE YET";
+      list.appendChild(empty);
+      return;
+    }
+    for (const addr of rows) {
+      const li = document.createElement("li");
+      li.textContent = addr;
+      list.appendChild(li);
+    }
+  }
+
   async function dropCardStatus() {
     const msg = document.getElementById("drop-card-msg");
     try {
@@ -2012,19 +2031,23 @@
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (msg) msg.textContent = json.error || `CARD STATUS ${res.status}`;
+        paintDropEmails([]);
         paintDropSendButtons();
         return json;
       }
       dropSentIds = new Set(json.sentStoreIds || []);
+      const emails = Array.isArray(json.emails) ? json.emails : [];
+      const n = emails.length || Number(json.n || 0);
       if (msg) {
-        const n = Number(json.n || 0);
         const wave = json.wave && !json.wave.done ? ` · SENDING ${(json.wave.storeIds || []).join(" / ").toUpperCase()}` : "";
         msg.textContent = n ? `${n} NOTIFY EMAILS ARMED${wave}` : "NO NOTIFY EMAILS YET";
       }
+      paintDropEmails(emails);
       paintDropSendButtons();
       return json;
     } catch (err) {
       if (msg) msg.textContent = err.message || "CARD STATUS FAILED";
+      paintDropEmails([]);
       paintDropSendButtons();
       return {};
     }

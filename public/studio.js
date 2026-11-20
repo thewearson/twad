@@ -2104,7 +2104,7 @@
         again = true;
       }
       let safety = 0;
-      let cursor = 0;
+      let cursor = "";
       while (safety < 3000) {
         safety += 1;
         const res = await fetch("/api/drop-card", {
@@ -2128,9 +2128,10 @@
           snack("NO NOTIFY EMAILS YET.", true);
           break;
         }
-        cursor = Number(json.cursor || cursor);
+        cursor = json.cursor == null ? cursor : String(json.cursor);
         const total = Number(json.total || 0);
-        if (msg) msg.textContent = `SENDING ${store.label.toUpperCase()} · ${cursor}/${total || "?"}`;
+        const sentN = Number(json.n || total || 0);
+        if (msg) msg.textContent = `SENDING ${store.label.toUpperCase()} · ${total ? `${Math.min(safety * 40, total)}/${total}` : sentN || "?"}`;
         if (Array.isArray(json.sentStoreIds)) dropSentIds = new Set(json.sentStoreIds);
         if (json.done) {
           dropSentIds.add(store.id);

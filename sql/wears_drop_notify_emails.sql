@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS public.drop_notify_state (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+ALTER TABLE public.drop_notify_state
+  ADD COLUMN IF NOT EXISTS wave jsonb;
+
 ALTER TABLE public.drop_notify_emails ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.drop_notify_state ENABLE ROW LEVEL SECURITY;
 
@@ -33,6 +36,7 @@ DECLARE
   pack text := lower(trim(p_pack));
   addr text := lower(trim(p_email));
   n int;
+  ins int;
 BEGIN
   IF pack !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
     RAISE EXCEPTION 'bad pack';
@@ -40,16 +44,20 @@ BEGIN
   IF addr !~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' OR char_length(addr) > 180 THEN
     RAISE EXCEPTION 'bad email';
   END IF;
-  SELECT count(*) INTO n FROM public.drop_notify_emails WHERE pack_id = pack;
   IF coalesce(p_off, false) THEN
     DELETE FROM public.drop_notify_emails WHERE pack_id = pack AND email = addr;
   ELSE
-    IF n >= 100000 THEN
-      RAISE EXCEPTION 'list full';
-    END IF;
     INSERT INTO public.drop_notify_emails (pack_id, email)
     VALUES (pack, addr)
     ON CONFLICT (pack_id, email) DO NOTHING;
+    GET DIAGNOSTICS ins = ROW_COUNT;
+    IF ins = 1 THEN
+      SELECT count(*) INTO n FROM public.drop_notify_emails WHERE pack_id = pack;
+      IF n > 100000 THEN
+        DELETE FROM public.drop_notify_emails WHERE pack_id = pack AND email = addr;
+        RAISE EXCEPTION 'list full';
+      END IF;
+    END IF;
   END IF;
   SELECT count(*) INTO n FROM public.drop_notify_emails WHERE pack_id = pack;
   RETURN jsonb_build_object('ok', true, 'n', n);

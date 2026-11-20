@@ -561,14 +561,16 @@ function parseCount(headers, fallback) {
   return Number.isFinite(total) && total >= 0 ? total : fallback;
 }
 
-async function pageDropEmails(env, newsId, offset = 0, limit = 100, q = "") {
+async function pageDropEmails(env, newsId, offset = 0, limit = 100, q = "", after = "") {
   const pack = dropPackId(newsId, env);
-  const from = Math.max(0, Number(offset) || 0);
   const size = Math.min(1000, Math.max(1, Number(limit) || 100));
+  const keyset = String(after || "").trim().toLowerCase();
+  const from = keyset ? 0 : Math.max(0, Number(offset) || 0);
   const to = from + size - 1;
   let path = `/rest/v1/drop_notify_emails?pack_id=eq.${encodeURIComponent(pack)}&select=email&order=email.asc`;
   const needle = String(q || "").trim().toLowerCase().replace(/[*,]/g, "");
   if (needle) path += `&email=ilike.${encodeURIComponent(`*${needle}*`)}`;
+  else if (keyset) path += `&email=gt.${encodeURIComponent(keyset)}`;
   const res = await sbFetch(env, path, {
     method: "GET",
     extra: { Range: `${from}-${to}`, Prefer: "count=exact" },
@@ -627,7 +629,7 @@ async function tickDropFromDb(env) {
     const storeId = state.wave?.storeId && remain.includes(String(state.wave.storeId))
       ? String(state.wave.storeId)
       : remain[0];
-    const cursor = state.wave?.storeId === storeId ? Number(state.wave.offset || 0) || 0 : 0;
+    const cursor = state.wave?.storeId === storeId ? String(state.wave.cursor || "") : "";
     const req = new Request(`https://twad.local/api/drop-card?newsId=${encodeURIComponent(job.newsId)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -636,7 +638,7 @@ async function tickDropFromDb(env) {
     const res = await dropCardProxy(req, env);
     const json = await res.json().catch(() => ({}));
     if (json.done) await setDropWave(env, job.newsId, null);
-    else await setDropWave(env, job.newsId, { storeId, offset: Number(json.cursor || cursor) || 0 });
+    else await setDropWave(env, job.newsId, { storeId, cursor: String(json.cursor || cursor || "") });
     return json;
   }
   return { skipped: true };
@@ -699,12 +701,16 @@ async function dropCardProxy(request, env) {
   if (!bodyObj.again && storeIds.length && storeIds.every((id) => state.sentStoreIds.includes(id))) {
     return json(200, { already: true, sentStoreIds: state.sentStoreIds, storeIds });
   }
-  const offset = Math.max(0, Number(bodyObj.cursor || 0) || 0);
-  const page = await pageDropEmails(env, packNewsId, offset, 40);
+  const after = String(bodyObj.cursor || "").trim().toLowerCase();
+  const page = await pageDropEmails(env, packNewsId, 0, 40, "", after);
   if (page.error) return json(503, { error: page.error });
-  if (!page.n) return json(200, { empty: true, n: 0, cursor: 0, total: 0, done: true, sentStoreIds: state.sentStoreIds });
-  const next = offset + page.emails.length;
-  const done = next >= page.n || !page.emails.length;
+  if (!page.n) return json(200, { empty: true, n: 0, cursor: "", total: 0, done: true, sentStoreIds: state.sentStoreIds });
+  if (!page.emails.length) {
+    const sentStoreIds = await markDropSent(env, packNewsId, storeIds);
+    return json(200, { ok: true, done: true, cursor: after, total: page.n, n: page.n, sentStoreIds, storeIds });
+  }
+  const next = page.emails[page.emails.length - 1];
+  const done = page.emails.length < 40;
   bodyObj.newsId = packNewsId || bodyObj.newsId;
   bodyObj.emails = page.emails;
   bodyObj.batch = true;
@@ -730,7 +736,6 @@ async function dropCardProxy(request, env) {
     jsonOut.done = done;
     jsonOut.n = page.n;
     if (done) {
-      const storeIds = Array.isArray(bodyObj.storeIds) ? bodyObj.storeIds : [];
       jsonOut.sentStoreIds = await markDropSent(env, packNewsId, storeIds);
     } else {
       jsonOut.sentStoreIds = state.sentStoreIds;

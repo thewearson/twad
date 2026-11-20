@@ -16,7 +16,29 @@
   const NEWS_OPTIONAL = [
     "dek", "body", "source", "image_url", "image_urls",
     "product_name", "release_date", "buy_url", "buy_note", "sku", "category",
+    "drop_json",
   ];
+  const VICE_NEWS_ID = "8cbc034c-8bee-4f9f-a7c9-9b32672e1e65";
+  const VICE_AT = "2026-11-20T15:00:00Z";
+  const AF1_NEWS_ID = "75460ba6-0d53-402b-ad25-7a5a5a36dc7e";
+  const AF1_SHAPE_ID = "93e33b2f-e4e0-494d-b43d-34609210ab13";
+  const AF1_NEWS_IDS = [AF1_NEWS_ID, AF1_SHAPE_ID];
+  const AF1_AT = "2026-11-21T15:00:00Z";
+  const VICE_STORES = [
+    { id: "nba", label: "NBA Store", url: "https://store.nba.com" },
+    { id: "fanatics", label: "Fanatics", url: "https://www.fanatics.com/nba/o-1370+z-938737729-293541727" },
+    { id: "nike", label: "Nike SNKRS", url: "https://www.nike.com/launch" },
+    { id: "cactus", label: "Cactus Jack", url: "https://shop.travisscott.com" },
+  ];
+  const AF1_STORES = [
+    { id: "snkrs", label: "Nike SNKRS", url: "https://www.nike.com/launch" },
+    { id: "cactus", label: "Cactus Jack", url: "https://shop.travisscott.com" },
+  ];
+  const AF1_NOTE = "Nov 21 • 10:00 AM ET • AF1 Black & White + Apparel\nNov 23 • Gradient Camo & Full Lineup";
+  let dropOn = false;
+  let dropDefault = 0;
+  let dropSending = false;
+  let dropSentIds = new Set();
   const AVAIL = [
     { id: "in_stock", label: "IN STOCK" },
     { id: "sold_out", label: "SOLD OUT" },
@@ -1700,8 +1722,10 @@
         v.forEach(add);
         return;
       }
+      if (typeof v === "object") return;
       const s = String(v).trim();
-      if (!s || s === "null" || out.includes(s) || out.length >= MAX_NEWS_PHOTOS) return;
+      if (!s || s === "null" || s === "[object Object]" || out.includes(s) || out.length >= MAX_NEWS_PHOTOS) return;
+      if (!/^https?:\/\//i.test(s) && !s.startsWith("blob:")) return;
       out.push(s);
     };
     add(raw);
@@ -1720,6 +1744,370 @@
     if (hrs < 24) return `${hrs} HOUR${hrs === 1 ? "" : "S"} AGO`;
     const days = Math.round(hrs / 24);
     return `${days} DAY${days === 1 ? "" : "S"} AGO`;
+  }
+
+  function looksViceCity(row) {
+    if (String(row?.id || "") === VICE_NEWS_ID) return true;
+    const s = `${row?.title || ""} ${row?.dek || ""} ${row?.body || ""} ${row?.product_name || ""}`.toUpperCase();
+    return s.includes("MIAMI HEAT") && s.includes("CACTUS JACK");
+  }
+  function looksAf1(row) {
+    const id = String(row?.id || "").toLowerCase();
+    if (AF1_NEWS_IDS.includes(id)) return true;
+    const title = String(row?.title || "").toUpperCase();
+    if (!title || title.includes("MIAMI HEAT")) return false;
+    return title.includes("GTA 6") && title.includes("TRAVIS SCOTT");
+  }
+  function currentDropKit() {
+    const title = document.getElementById("news-title")?.value || "";
+    if (looksAf1(editingNews) || looksAf1({ title })) {
+      return { at: AF1_AT, stores: AF1_STORES, defaultId: "snkrs" };
+    }
+    if (looksViceCity(editingNews) || looksViceCity({ title })) {
+      return { at: VICE_AT, stores: VICE_STORES, defaultId: "nba" };
+    }
+    return { at: VICE_AT, stores: VICE_STORES, defaultId: "nba" };
+  }
+  function isoToLocalInput(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function localInputToIso(v) {
+    if (!v) return "";
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+  }
+  function parseDropJson(raw) {
+    if (!raw) return null;
+    if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+    if (typeof raw === "string") {
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+    return null;
+  }
+  function parseDropNote(note) {
+    const lines = String(note || "").split(/\r?\n/);
+    const stores = [];
+    const human = [];
+    let at = "";
+    let off = false;
+    for (const line of lines) {
+      const t0 = line.trim();
+      if (!t0) continue;
+      if (/^AT\s+OFF$/i.test(t0) || /^DROP_OFF$/i.test(t0)) { off = true; continue; }
+      const atM = t0.match(/^AT\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z?)\s*$/i);
+      if (atM) { at = atM[1].endsWith("Z") ? atM[1] : `${atM[1]}Z`; continue; }
+      const sm = t0.match(/^(.+?)\s+(https?:\/\/\S+)\s*$/i);
+      if (sm) {
+        stores.push({ label: sm[1].trim(), url: sm[2].trim() });
+        continue;
+      }
+      human.push(t0);
+    }
+    return { at, stores, note: human.join("\n"), off };
+  }
+  function packDropNote(human, drop) {
+    if (!drop?.on) return String(human || "").trim();
+    const lines = [];
+    const h = String(human || "").trim();
+    if (h) lines.push(h);
+    lines.push(`AT ${drop.at}`);
+    (drop.stores || []).forEach((s) => {
+      if (s.label && s.url) lines.push(`${s.label} ${s.url}`);
+    });
+    return lines.join("\n");
+  }
+  function dropStoresFromFields() {
+    const kit = currentDropKit();
+    const stores = [];
+    for (let i = 1; i <= 4; i += 1) {
+      const label = document.getElementById(`drop-l${i}`)?.value.trim() || "";
+      const url = document.getElementById(`drop-u${i}`)?.value.trim() || "";
+      if (!label && !url) continue;
+      const href = /^https?:\/\//i.test(url) ? url : url ? `https://${url.replace(/^\/+/, "")}` : "";
+      stores.push({
+        id: studioStoreId(label, href, kit.stores[i - 1]?.id || `s${i}`),
+        label: label || kit.stores[i - 1]?.label || `STORE ${i}`,
+        url: href,
+      });
+    }
+    return stores;
+  }
+  function paintDropHint() {
+    const iso = localInputToIso(document.getElementById("drop-at")?.value || "");
+    const el = document.getElementById("drop-at-hint");
+    if (!el) return;
+    if (!iso) {
+      el.textContent = "10:00 AM ET = 15:00 UTC = 18:00 TSİ";
+      return;
+    }
+    const et = new Date(iso).toLocaleString("en-US", {
+      timeZone: "America/New_York",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    el.textContent = `${et} ET · ${iso}`;
+  }
+  function paintDropToggle() {
+    const host = document.getElementById("drop-toggle");
+    if (!host) return;
+    host.innerHTML = "";
+    [["Off", false], ["On", true]].forEach(([label, on]) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip" + (dropOn === on ? " on" : "");
+      b.textContent = label;
+      b.addEventListener("click", () => {
+        dropOn = on;
+        if (dropOn) {
+          const kit = currentDropKit();
+          const at = document.getElementById("drop-at");
+          if (at && !at.value) at.value = isoToLocalInput(kit.at);
+          kit.stores.forEach((s, i) => {
+            const l = document.getElementById(`drop-l${i + 1}`);
+            const u = document.getElementById(`drop-u${i + 1}`);
+            if (l && !l.value) l.value = s.label;
+            if (u && !u.value) u.value = s.url;
+          });
+        }
+        paintDropToggle();
+        paintDropDefault();
+        paintDropHint();
+        paintDropSendButtons();
+      });
+      host.appendChild(b);
+    });
+    const fields = document.getElementById("drop-fields");
+    if (fields) fields.classList.toggle("hidden", !dropOn);
+  }
+  function paintDropDefault() {
+    const host = document.getElementById("drop-default");
+    if (!host) return;
+    const stores = dropStoresFromFields();
+    host.innerHTML = "";
+    (stores.length ? stores : currentDropKit().stores).forEach((s, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip" + (dropDefault === i ? " on" : "");
+      b.textContent = s.label || `STORE ${i + 1}`;
+      b.addEventListener("click", () => {
+        dropDefault = i;
+        paintDropDefault();
+      });
+      host.appendChild(b);
+    });
+    paintDropSendButtons();
+  }
+  function fillDropFields(row) {
+    const json = parseDropJson(row?.drop_json);
+    const packed = parseDropNote(row?.buy_note);
+    const vice = looksViceCity(row);
+    const af1 = looksAf1(row);
+    const kit = af1
+      ? { at: AF1_AT, stores: AF1_STORES, defaultId: "snkrs" }
+      : (vice ? { at: VICE_AT, stores: VICE_STORES, defaultId: "nba" } : currentDropKit());
+    const off = json?.on === false || packed.off;
+    dropOn = !off && (json?.on === true || packed.stores.length >= 2 || vice || af1);
+    const listed = (json?.stores?.length ? json.stores : packed.stores).slice(0, 4);
+    const stores = (af1 || vice
+      ? kit.stores.map((base) => {
+          const hit = listed.find((s) => s.id === base.id)
+            || listed.find((s) => String(s.url || "").replace(/\/+$/, "") === base.url.replace(/\/+$/, ""))
+            || (base.id === "snkrs" ? listed.find((s) => /nike|snkrs/i.test(`${s.id || ""} ${s.label || ""} ${s.url || ""}`)) : null)
+            || {};
+          return { id: base.id, label: hit.label || base.label, url: hit.url || base.url };
+        })
+      : (listed.length ? listed : kit.stores)
+    ).slice(0, 4);
+    const at = json?.at || packed.at || kit.at;
+    const set = (id, v) => {
+      const el = document.getElementById(id);
+      if (el) el.value = v || "";
+    };
+    set("drop-at", isoToLocalInput(at));
+    for (let i = 0; i < 4; i += 1) {
+      set(`drop-l${i + 1}`, stores[i]?.label || (dropOn ? kit.stores[i]?.label : ""));
+      set(`drop-u${i + 1}`, stores[i]?.url || (dropOn ? kit.stores[i]?.url : ""));
+    }
+    const defId = json?.defaultId || (af1 ? "snkrs" : stores[0]?.id) || kit.defaultId;
+    dropDefault = Math.max(0, stores.findIndex((s) => s.id === defId));
+    if (dropDefault < 0) dropDefault = 0;
+    if (row) set("news-pnote", packed.note || (af1 && dropOn ? AF1_NOTE : ""));
+    paintDropToggle();
+    paintDropDefault();
+    paintDropHint();
+    dropCardStatus();
+  }
+  function studioStoreId(label, url, fallback) {
+    const s = `${label} ${url}`.toLowerCase();
+    if (fallback === "snkrs" || looksAf1(editingNews) || looksAf1({ title: document.getElementById("news-title")?.value || "" })) {
+      if (/snkrs|nike/.test(s) && !/cactus|travis/.test(s)) return "snkrs";
+    }
+    if (/nike|snkrs/.test(s)) return "nike";
+    if (/fanatics/.test(s)) return "fanatics";
+    if (/nba/.test(s)) return "nba";
+    if (/cactus|travis/.test(s)) return "cactus";
+    return fallback;
+  }
+  function readDropPayload(humanNote) {
+    const human = String(humanNote || "").trim();
+    const title = document.getElementById("news-title")?.value || "";
+    const vice = looksViceCity(editingNews) || looksViceCity({ title });
+    const af1 = looksAf1(editingNews) || looksAf1({ title });
+    const kit = currentDropKit();
+    if (!dropOn) {
+      const had = parseDropJson(editingNews?.drop_json);
+      const out = {
+        buy_note: vice || af1 ? [human, "AT OFF"].filter(Boolean).join("\n") : human,
+        buy_url: document.getElementById("news-purl")?.value.trim() || "",
+      };
+      if (vice || af1 || had) out.drop_json = { on: false };
+      return out;
+    }
+    const stores = [];
+    for (let i = 1; i <= 4; i += 1) {
+      const label = document.getElementById(`drop-l${i}`)?.value.trim() || "";
+      const url = document.getElementById(`drop-u${i}`)?.value.trim() || "";
+      if (!label || !url) continue;
+      const href = /^https?:\/\//i.test(url) ? url : `https://${url.replace(/^\/+/, "")}`;
+      stores.push({
+        id: studioStoreId(label, href, kit.stores[i - 1]?.id || `s${i}`),
+        label,
+        url: href,
+      });
+    }
+    const at = localInputToIso(document.getElementById("drop-at")?.value) || kit.at;
+    const pick = stores[dropDefault] || stores[0];
+    const drop = { on: true, at, stores, defaultId: pick?.id || kit.defaultId };
+    return {
+      drop_json: drop,
+      buy_note: packDropNote(human || (af1 ? AF1_NOTE : ""), drop),
+      buy_url: pick?.url || document.getElementById("news-purl")?.value.trim() || "",
+    };
+  }
+
+  function paintDropSendButtons() {
+    for (let i = 1; i <= 4; i += 1) {
+      const btn = document.getElementById(`drop-send-${i}`);
+      if (!btn) continue;
+      const store = dropStoresFromFields()[i - 1];
+      const sent = !!(store?.id && dropSentIds.has(store.id));
+      btn.disabled = dropSending;
+      btn.classList.toggle("is-sent", sent);
+      btn.textContent = dropSending ? "SENDING" : sent ? "SENT" : "SEND CARD";
+    }
+  }
+
+  async function dropCardStatus() {
+    const msg = document.getElementById("drop-card-msg");
+    try {
+      const q = editingNews?.id ? `?newsId=${encodeURIComponent(editingNews.id)}` : "";
+      const res = await fetch(`/api/drop-card${q}`, { credentials: "same-origin" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (msg) msg.textContent = json.error || `CARD STATUS ${res.status}`;
+        paintDropSendButtons();
+        return json;
+      }
+      dropSentIds = new Set(json.sentStoreIds || []);
+      if (msg) {
+        const n = Number(json.n || 0);
+        const wave = json.wave && !json.wave.done ? ` · SENDING ${(json.wave.storeIds || []).join(" / ").toUpperCase()}` : "";
+        msg.textContent = n ? `${n} NOTIFY EMAILS ARMED${wave}` : "NO NOTIFY EMAILS YET";
+      }
+      paintDropSendButtons();
+      return json;
+    } catch (err) {
+      if (msg) msg.textContent = err.message || "CARD STATUS FAILED";
+      paintDropSendButtons();
+      return {};
+    }
+  }
+
+  async function persistDropFields() {
+    if (!editingNews?.id) throw new Error("SAVE THE DISPATCH FIRST.");
+    const dropPack = readDropPayload(document.getElementById("news-pnote")?.value || "");
+    if (!dropOn || !dropPack.drop_json?.stores?.length) {
+      throw new Error("TURN THE DROP ON AND ADD STORE URLS.");
+    }
+    await patchLoose("drip_news", editingNews.id, {
+      drop_json: dropPack.drop_json,
+      buy_note: dropPack.buy_note,
+      buy_url: dropPack.buy_url,
+    }, NEWS_OPTIONAL);
+    editingNews = { ...editingNews, drop_json: dropPack.drop_json, buy_note: dropPack.buy_note, buy_url: dropPack.buy_url };
+  }
+
+  async function sendDropStoreCard(index) {
+    if (dropSending) {
+      snack("CARD IS SENDING.");
+      return;
+    }
+    const store = dropStoresFromFields()[index - 1];
+    if (!store?.id || !store.url) {
+      snack("ADD THIS STORE URL FIRST.", true);
+      return;
+    }
+    const msg = document.getElementById("drop-card-msg");
+    dropSending = true;
+    paintDropSendButtons();
+    try {
+      await persistDropFields();
+      let again = false;
+      if (dropSentIds.has(store.id)) {
+        if (!window.confirm(`SEND ${store.label.toUpperCase()} AGAIN TO EVERY NOTIFY EMAIL?`)) {
+          return;
+        }
+        again = true;
+      }
+      let safety = 0;
+      while (safety < 400) {
+        safety += 1;
+        const res = await fetch("/api/drop-card", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ newsId: editingNews.id, storeIds: [store.id], again }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json.error || `SEND ${res.status}`);
+        if (json.busy) {
+          snack("ANOTHER CARD IS SENDING. WAIT.", true);
+          break;
+        }
+        if (json.already && !again) {
+          dropSentIds.add(store.id);
+          snack(`${store.label.toUpperCase()} ALREADY SENT.`);
+          break;
+        }
+        if (json.empty) {
+          snack("NO NOTIFY EMAILS YET.", true);
+          break;
+        }
+        const cursor = Number(json.cursor || 0);
+        const total = Number(json.total || 0);
+        if (msg) msg.textContent = `SENDING ${store.label.toUpperCase()} · ${cursor}/${total || "?"}`;
+        if (Array.isArray(json.sentStoreIds)) dropSentIds = new Set(json.sentStoreIds);
+        if (json.done) {
+          dropSentIds.add(store.id);
+          snack(`${store.label.toUpperCase()} CARD SENT.`);
+          break;
+        }
+        again = false;
+        await new Promise((r) => setTimeout(r, 280));
+      }
+    } catch (err) {
+      snack(err.message || String(err), true);
+    } finally {
+      dropSending = false;
+      await dropCardStatus();
+    }
   }
 
   function resetNewsCompose() {
@@ -1742,6 +2130,7 @@
     set("news-purl", "");
     set("news-pnote", "");
     set("news-sku", "");
+    fillDropFields(null);
     document.getElementById("news-step").textContent = "New dispatch";
     document.getElementById("news-save").textContent = "Publish dispatch";
     document.getElementById("news-edit-msg").textContent = "";
@@ -2032,6 +2421,7 @@
       document.getElementById("news-purl").value = row.buy_url || "";
       document.getElementById("news-pnote").value = row.buy_note || "";
       document.getElementById("news-sku").value = row.sku || "";
+      fillDropFields(row);
       newsPhotos = newsUrlList(row).map((href) => ({ blob: null, preview: href, url: href, cutout: urlLooksCutout(href) }));
       document.getElementById("news-step").textContent = "Edit dispatch";
       document.getElementById("news-save").textContent = "Save dispatch";
@@ -2062,9 +2452,9 @@
     const source = document.getElementById("news-source").value.trim() || "THE WEARS EDITORIAL";
     const productName = document.getElementById("news-pname").value.trim();
     const releaseDate = document.getElementById("news-pdate").value.trim();
-    const buyUrl = document.getElementById("news-purl").value.trim();
     const buyNote = document.getElementById("news-pnote").value.trim();
     const sku = document.getElementById("news-sku").value.trim();
+    const dropPack = readDropPayload(buyNote);
     const msg = document.getElementById("news-edit-msg");
     if (!title) {
       snack("TITLE REQUIRED.", true);
@@ -2072,6 +2462,10 @@
     }
     if (!newsPhotos.length) {
       snack("ADD AN HD PHOTO FIRST.", true);
+      return;
+    }
+    if (dropOn && (!dropPack.drop_json?.stores || dropPack.drop_json.stores.length < 2)) {
+      snack("DROP NEEDS 2 STORE URLS.", true);
       return;
     }
     msg.textContent = "SAVING…";
@@ -2087,9 +2481,10 @@
         image_urls: imageUrls,
         product_name: productName,
         release_date: releaseDate,
-        buy_url: buyUrl,
-        buy_note: buyNote,
+        buy_url: dropPack.buy_url,
+        buy_note: dropPack.buy_note,
         sku,
+        drop_json: dropPack.drop_json,
       };
       if (editingNews?.id) {
         await patchLoose("drip_news", editingNews.id, row, NEWS_OPTIONAL);
@@ -2104,7 +2499,7 @@
     } catch (err) {
       const text = err.message || String(err);
       msg.textContent = text;
-      snack(text.includes("drip_news") ? `${text}\nNazım SQL: sql/wears_drip_news.sql` : text, true);
+      snack(text.includes("drip_news") ? `${text}\nNazım SQL: sql/wears_drip_news.sql\nDrop column: sql/wears_drip_news_drop.sql` : text, true);
     }
   }
 
@@ -3026,6 +3421,18 @@
   });
   ["news-pname", "news-pdate", "news-purl", "news-pnote", "news-sku"].forEach((id) => {
     document.getElementById(id).addEventListener("input", paintNewsPlate);
+  });
+  document.getElementById("drop-at")?.addEventListener("input", paintDropHint);
+  ["drop-l1", "drop-l2", "drop-l3", "drop-l4", "drop-u1", "drop-u2", "drop-u3", "drop-u4"].forEach((id) => {
+    document.getElementById(id)?.addEventListener("input", () => {
+      paintDropDefault();
+      paintDropSendButtons();
+    });
+  });
+  document.getElementById("drop-fields")?.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-drop-send]");
+    if (!btn) return;
+    sendDropStoreCard(Number(btn.getAttribute("data-drop-send")));
   });
   document.getElementById("tables-back").addEventListener("click", () => {
     showDesk();

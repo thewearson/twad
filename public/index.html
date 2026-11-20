@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
   <title>THE WEARS ON STUDIO</title>
-  <link rel="stylesheet" href="studio.css?v=nosize6">
+  <link rel="stylesheet" href="studio.css?v=nosize8">
 </head>
 <body>
   <section id="gate">
@@ -261,6 +261,53 @@
           <label for="news-pnote">Where it drops · if it is not out</label>
           <input id="news-pnote" placeholder="COMPLEXCON LAS VEGAS · OCT 3 + 4">
         </div>
+        <p class="step" style="margin-top:28px">Drop widget</p>
+        <p class="hint">Countdown + store buttons + notify on the public article. NBA Store first. Fanatics / SNKRS / Cactus Jack. No live store scrape — URLs are yours. 10:00 AM ET = 15:00 UTC = 18:00 TSİ.</p>
+        <p class="hint">SEND CARD mails that store now to every NOTIFY email — even before the countdown. That store will not mail again at T=0. Remaining stores still go when the lock opens, with the URLs saved here.</p>
+        <label>Widget</label>
+        <div id="drop-toggle" class="avail" style="margin-bottom:18px"></div>
+        <div id="drop-fields">
+          <div class="field">
+            <label for="drop-at">Drop time · local, saved as UTC</label>
+            <input id="drop-at" type="datetime-local">
+            <p class="hint" id="drop-at-hint" style="margin:8px 0 0">NOV. 20 — 10:00 AM ET</p>
+          </div>
+          <div class="field">
+            <label>Store 1</label>
+            <div class="drop-store">
+              <input id="drop-l1" placeholder="NBA Store">
+              <input id="drop-u1" placeholder="https://store.nba.com">
+              <button type="button" class="drop-send" id="drop-send-1" data-drop-send="1">SEND CARD</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Store 2</label>
+            <div class="drop-store">
+              <input id="drop-l2" placeholder="Fanatics">
+              <input id="drop-u2" placeholder="https://www.fanatics.com/nba/o-1370+z-938737729-293541727">
+              <button type="button" class="drop-send" id="drop-send-2" data-drop-send="2">SEND CARD</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Store 3</label>
+            <div class="drop-store">
+              <input id="drop-l3" placeholder="Nike SNKRS">
+              <input id="drop-u3" placeholder="https://www.nike.com/launch">
+              <button type="button" class="drop-send" id="drop-send-3" data-drop-send="3">SEND CARD</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Store 4</label>
+            <div class="drop-store">
+              <input id="drop-l4" placeholder="Cactus Jack">
+              <input id="drop-u4" placeholder="https://shop.travisscott.com">
+              <button type="button" class="drop-send" id="drop-send-4" data-drop-send="4">SEND CARD</button>
+            </div>
+          </div>
+          <p id="drop-card-msg" class="hint">NOTIFY LIST LOADS WITH THE DISPATCH.</p>
+          <label>Default store · auto-redirect</label>
+          <div id="drop-default" class="avail" style="margin-bottom:18px"></div>
+        </div>
         <button type="button" class="btn ink" id="news-save">Publish dispatch</button>
         <p id="news-edit-msg" class="muted"></p>
       </div>
@@ -397,6 +444,6 @@
 
   <script src="config.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="studio.js?v=nosize7"></script>
+  <script src="studio.js?v=nosize10"></script>
 </body>
 </html>

@@ -708,6 +708,42 @@ label {
   margin-bottom: 6px;
 }
 .listing input { padding: 8px; }
+.drop-store {
+  display: grid;
+  grid-template-columns: minmax(110px, 150px) minmax(0, 1fr) 128px;
+  gap: 6px;
+}
+.drop-store input { padding: 10px 12px; }
+.drop-send {
+  min-height: 42px;
+  border: 1.5px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.drop-send.is-sent {
+  background: var(--paper);
+  color: var(--ink);
+}
+.drop-send:disabled {
+  opacity: 0.35;
+  cursor: wait;
+}
+#drop-card-msg {
+  margin: 4px 0 16px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+@media (max-width: 720px) {
+  .drop-store { grid-template-columns: 1fr; }
+}
+#drop-fields.hidden { display: none; }
 
 .card-preview {
   border: var(--stroke) solid var(--ink);

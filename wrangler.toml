@@ -5,16 +5,32 @@ workers_dev = true
 preview_urls = true
 
 [durable_objects]
-bindings = [{ name = "VAULT", class_name = "StudioVault" }]
+bindings = [
+  { name = "VAULT", class_name = "StudioVault" },
+  { name = "DROP_NOTIFY", class_name = "DropNotify" },
+]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["StudioVault"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["DropNotify"]
+
+[triggers]
+crons = ["* * * * *"]
+
 [vars]
 WEARS_SUPABASE_URL = "https://ctldtidtnvctxoquextm.supabase.co"
 WEARS_SUPABASE_ANON_KEY = "sb_publishable_t3zzhT3K_iR0FWuFCA4-Ow_Rdn8zsQk"
 STUDIO_EMAIL = "thewears.on@gmail.com"
+GMAIL_USER = "thewears.on@gmail.com"
+VICE_NEWS_ID = "8cbc034c-8bee-4f9f-a7c9-9b32672e1e65"
+VICE_AT = "2026-11-20T15:00:00Z"
+AF1_NEWS_ID = "75460ba6-0d53-402b-ad25-7a5a5a36dc7e"
+AF1_SHAPE_ID = "93e33b2f-e4e0-494d-b43d-34609210ab13"
+AF1_AT = "2026-11-21T15:00:00Z"
 
 [assets]
 directory = "./public"

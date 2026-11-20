@@ -534,16 +534,20 @@ async function dropNotifyResponse(request, env) {
   const off = body.off === true;
   if (!email) return corsJson(request, 400, { error: "Email required." });
   if (!newsId) return corsJson(request, 400, { error: "Drop required." });
-  const stub = dropStub(env);
-  if (!stub) return corsJson(request, 503, { error: "Notify inbox missing." });
-  const res = await stub.fetch("https://drop.notify/sub", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, newsId, off, at: body.at || env.VICE_AT }),
+  const pack = dropPackId(newsId, env);
+  const res = await sbFetch(env, "/rest/v1/rpc/wears_drop_notify_put", {
+    body: { p_pack: pack, p_email: email, p_off: off },
   });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) return corsJson(request, res.status, data);
-  return corsJson(request, 200, { ok: true, on: !off });
+  if (!res.ok) {
+    const msg = errText(res.data) || `NOTIFY PUT ${res.status}`;
+    const missing = /could not find|does not exist|schema cache/i.test(msg);
+    const full = /list full/i.test(msg);
+    return corsJson(request, full ? 429 : 503, {
+      error: missing ? "NOTIFY TABLE MISSING. PASTE sql/wears_drop_notify_emails.sql" : full ? "List full." : msg,
+    });
+  }
+  const n = Number(res.data && res.data.n) || 0;
+  return corsJson(request, 200, { ok: true, on: !off, newsId: pack, n });
 }
 
 function dropPackId(raw, env) {
@@ -607,8 +611,118 @@ async function setDropWave(env, newsId, wave) {
   });
 }
 
-async function tickDropFromDb(env) {
-  const jobs = [
+async function claimDropEmails(env, newsId, storeId, { reset = false, limit = 40 } = {}) {
+  const pack = dropPackId(newsId, env);
+  const res = await sbFetch(env, "/rest/v1/rpc/wears_drop_notify_claim", {
+    body: {
+      p_pack: pack,
+      p_store: String(storeId || "").toLowerCase(),
+      p_limit: Math.min(40, Math.max(1, Number(limit) || 40)),
+      p_reset: !!reset,
+    },
+  });
+  if (!res.ok) {
+    const msg = errText(res.data) || `NOTIFY CLAIM ${res.status}`;
+    const missing = /could not find|does not exist|schema cache/i.test(msg);
+    return {
+      emails: [],
+      remain: 0,
+      armed: 0,
+      done: false,
+      empty: false,
+      error: missing ? "NOTIFY TABLE MISSING. PASTE sql/wears_drop_notify_emails.sql" : msg,
+    };
+  }
+  const data = res.data && typeof res.data === "object" && !Array.isArray(res.data) ? res.data : {};
+  const emails = [...new Set((Array.isArray(data.emails) ? data.emails : []).map((e) => cleanEmail(e)).filter(Boolean))];
+  return {
+    emails,
+    remain: Number(data.remain || 0) || 0,
+    armed: Number(data.armed || 0) || 0,
+    done: data.done === true,
+    empty: data.empty === true,
+  };
+}
+
+async function markDropEmails(env, newsId, storeId, emails) {
+  const pack = dropPackId(newsId, env);
+  let last = { ok: false };
+  for (let i = 0; i < 4; i += 1) {
+    last = await sbFetch(env, "/rest/v1/rpc/wears_drop_notify_mark", {
+      body: { p_pack: pack, p_store: String(storeId || "").toLowerCase(), p_emails: emails },
+    });
+    if (last.ok) return last;
+  }
+  return last;
+}
+
+async function mailDropBatch(env, newsId, storeIds, emails, key) {
+  const href = new URL("https://thewearson.com/api/drop-studio");
+  if (newsId) href.searchParams.set("newsId", newsId);
+  const res = await fetch(href.toString(), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      newsId,
+      storeIds,
+      emails,
+      batch: true,
+      total: emails.length,
+      done: false,
+    }),
+  });
+  const text = await res.text();
+  let jsonOut = {};
+  try { jsonOut = JSON.parse(text); } catch { jsonOut = { error: text || `SEND ${res.status}` }; }
+  if (!res.ok) throw new Error(jsonOut.error || `SEND ${res.status}`);
+  return jsonOut;
+}
+
+async function drainDropStore(env, newsId, storeId, { reset = false, batches = 6, key } = {}) {
+  const id = String(storeId || "").toLowerCase();
+  const secret = key || (await readSecret(env.DROP_STUDIO_KEY)) || (await readSecret(env.GMAIL_APP_PASSWORD));
+  if (!secret) return { error: "Set GMAIL_APP_PASSWORD (or DROP_STUDIO_KEY) on Studio so cards can send." };
+  let resetOnce = !!reset;
+  let last = { ok: true, done: false, n: 0, total: 0, remain: 0, storeIds: [id], sent: 0 };
+  for (let i = 0; i < batches; i += 1) {
+    const claimed = await claimDropEmails(env, newsId, id, { reset: resetOnce, limit: 40 });
+    resetOnce = false;
+    if (claimed.error) return { error: claimed.error };
+    last.n = claimed.armed;
+    last.total = claimed.armed;
+    last.remain = claimed.remain;
+    if (!claimed.armed) {
+      await setDropWave(env, newsId, null);
+      return { ...last, empty: true, done: true };
+    }
+    if (!claimed.emails.length) {
+      if (claimed.remain === 0) {
+        const sentStoreIds = await markDropSent(env, newsId, [id]);
+        await setDropWave(env, newsId, null);
+        return { ...last, done: true, remain: 0, sentStoreIds };
+      }
+      return last;
+    }
+    await setDropWave(env, newsId, { storeId: id });
+    try {
+      await mailDropBatch(env, newsId, [id], claimed.emails, secret);
+    } catch (err) {
+      return { error: String(err && err.message || err), ...last, done: false };
+    }
+    const marked = await markDropEmails(env, newsId, id, claimed.emails);
+    if (!marked.ok) return { error: errText(marked.data) || "NOTIFY MARK FAILED", ...last, done: false };
+    last.sent = (last.sent || 0) + claimed.emails.length;
+    last.remain = Math.max(0, claimed.remain - claimed.emails.length);
+    last.cursor = "drain";
+  }
+  return last;
+}
+
+function dropJobs(env) {
+  return [
     {
       newsId: env.VICE_NEWS_ID || "8cbc034c-8bee-4f9f-a7c9-9b32672e1e65",
       at: env.VICE_AT || "2026-11-20T15:00:00Z",
@@ -620,26 +734,22 @@ async function tickDropFromDb(env) {
       storeIds: ["snkrs", "cactus"],
     },
   ];
+}
+
+async function tickDropFromDb(env) {
+  const jobs = dropJobs(env);
+  for (const job of jobs) {
+    const state = await getDropState(env, job.newsId);
+    const waveId = String(state.wave?.storeId || "");
+    if (waveId) return drainDropStore(env, job.newsId, waveId, { batches: 8 });
+  }
   for (const job of jobs) {
     const at = Date.parse(job.at);
     if (!Number.isFinite(at) || Date.now() < at) continue;
     const state = await getDropState(env, job.newsId);
     const remain = job.storeIds.filter((id) => !state.sentStoreIds.includes(id));
     if (!remain.length) continue;
-    const storeId = state.wave?.storeId && remain.includes(String(state.wave.storeId))
-      ? String(state.wave.storeId)
-      : remain[0];
-    const cursor = state.wave?.storeId === storeId ? String(state.wave.cursor || "") : "";
-    const req = new Request(`https://twad.local/api/drop-card?newsId=${encodeURIComponent(job.newsId)}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ newsId: job.newsId, storeIds: [storeId], cursor }),
-    });
-    const res = await dropCardProxy(req, env);
-    const json = await res.json().catch(() => ({}));
-    if (json.done) await setDropWave(env, job.newsId, null);
-    else await setDropWave(env, job.newsId, { storeId, cursor: String(json.cursor || cursor || "") });
-    return json;
+    return drainDropStore(env, job.newsId, remain[0], { batches: 8 });
   }
   return { skipped: true };
 }
@@ -661,7 +771,7 @@ async function markDropSent(env, newsId, storeIds) {
   return sentStoreIds;
 }
 
-async function dropCardProxy(request, env) {
+async function dropCardProxy(request, env, ctx) {
   const key = (await readSecret(env.DROP_STUDIO_KEY)) || (await readSecret(env.GMAIL_APP_PASSWORD));
   if (!key) {
     return json(503, { error: "Set GMAIL_APP_PASSWORD (or DROP_STUDIO_KEY) on Studio so cards can send." });
@@ -698,49 +808,23 @@ async function dropCardProxy(request, env) {
     });
   }
   const storeIds = Array.isArray(bodyObj.storeIds) ? bodyObj.storeIds.map(String) : [];
-  if (!bodyObj.again && storeIds.length && storeIds.every((id) => state.sentStoreIds.includes(id))) {
+  const storeId = String(storeIds[0] || "").toLowerCase();
+  if (!storeId) return json(400, { error: "storeIds required." });
+  const waveId = String(state.wave?.storeId || "");
+  if (!bodyObj.again && storeIds.every((id) => state.sentStoreIds.includes(id)) && waveId !== storeId) {
     return json(200, { already: true, sentStoreIds: state.sentStoreIds, storeIds });
   }
-  const after = String(bodyObj.cursor || "").trim().toLowerCase();
-  const page = await pageDropEmails(env, packNewsId, 0, 40, "", after);
-  if (page.error) return json(503, { error: page.error });
-  if (!page.n) return json(200, { empty: true, n: 0, cursor: "", total: 0, done: true, sentStoreIds: state.sentStoreIds });
-  if (!page.emails.length) {
-    const sentStoreIds = await markDropSent(env, packNewsId, storeIds);
-    return json(200, { ok: true, done: true, cursor: after, total: page.n, n: page.n, sentStoreIds, storeIds });
-  }
-  const next = page.emails[page.emails.length - 1];
-  const done = page.emails.length < 40;
-  bodyObj.newsId = packNewsId || bodyObj.newsId;
-  bodyObj.emails = page.emails;
-  bodyObj.batch = true;
-  bodyObj.cursor = next;
-  bodyObj.total = page.n;
-  bodyObj.done = done;
-  const init = {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(bodyObj),
-  };
   try {
-    const res = await fetch(href.toString(), init);
-    const text = await res.text();
-    let jsonOut = {};
-    try { jsonOut = JSON.parse(text); } catch { jsonOut = { error: text || `SEND ${res.status}` }; }
-    if (!res.ok) return locked(res.status, JSON.stringify(jsonOut), "application/json; charset=utf-8");
-    jsonOut.cursor = next;
-    jsonOut.total = page.n;
-    jsonOut.done = done;
-    jsonOut.n = page.n;
-    if (done) {
-      jsonOut.sentStoreIds = await markDropSent(env, packNewsId, storeIds);
-    } else {
-      jsonOut.sentStoreIds = state.sentStoreIds;
+    const out = await drainDropStore(env, packNewsId, storeId, {
+      reset: bodyObj.again === true,
+      batches: 6,
+      key,
+    });
+    if (out.error) return json(503, out);
+    if (!out.done && !out.empty && ctx && typeof ctx.waitUntil === "function") {
+      ctx.waitUntil(drainDropStore(env, packNewsId, storeId, { batches: 16, key }).catch(() => {}));
     }
-    return json(200, jsonOut);
+    return json(200, { ok: !out.error, ...out, storeIds: [storeId] });
   } catch (err) {
     return json(502, { error: String(err && err.message || err) });
   }
@@ -774,7 +858,7 @@ async function sendDueDropMail(env, opt = {}) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const path = new URL(request.url).pathname.replace(/\/$/, "") || "/";
     if (path === "/api/drop-notify") {
       return dropNotifyResponse(request, env);
@@ -784,11 +868,11 @@ export default {
       return locked(403, "Forbidden");
     }
     if (path === "/api/drop-card") {
-      return dropCardProxy(request, env);
+      return dropCardProxy(request, env, ctx);
     }
     if (path === "/api/drop-fire") {
       try {
-        const out = await sendDueDropMail(env, { force: true });
+        const out = await tickDropFromDb(env);
         return json(200, out);
       } catch (err) {
         return json(500, { error: String(err && err.message || err) });

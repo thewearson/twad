@@ -2129,9 +2129,10 @@
           break;
         }
         cursor = json.cursor == null ? cursor : String(json.cursor);
-        const total = Number(json.total || 0);
-        const sentN = Number(json.n || total || 0);
-        if (msg) msg.textContent = `SENDING ${store.label.toUpperCase()} · ${total ? `${Math.min(safety * 40, total)}/${total}` : sentN || "?"}`;
+        const total = Number(json.total || json.n || 0);
+        const remain = Number(json.remain);
+        const sentN = Number.isFinite(remain) && total ? Math.max(0, total - remain) : Number(json.sent || 0);
+        if (msg) msg.textContent = `SENDING ${store.label.toUpperCase()} · ${total ? `${sentN}/${total}` : sentN || "?"}`;
         if (Array.isArray(json.sentStoreIds)) dropSentIds = new Set(json.sentStoreIds);
         if (json.done) {
           dropSentIds.add(store.id);

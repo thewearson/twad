@@ -159,7 +159,7 @@ async function sbFetch(env, path, { method = "POST", body, extra = {}, key } = {
   } catch {
     data = { message: text };
   }
-  return { ok: res.ok, status: res.status, data };
+  return { ok: res.ok, status: res.status, data, headers: res.headers };
 }
 
 async function findAuthUser(env, email) {
@@ -555,11 +555,108 @@ function dropPackId(raw, env) {
   return af1.has(id) ? String(env.AF1_NEWS_ID || "75460ba6-0d53-402b-ad25-7a5a5a36dc7e").toLowerCase() : id;
 }
 
-async function listDropEmails(env, newsId) {
+function parseCount(headers, fallback) {
+  const raw = headers && typeof headers.get === "function" ? (headers.get("content-range") || "") : "";
+  const total = Number(String(raw.split("/")[1] || "").replace(/[^\d]/g, ""));
+  return Number.isFinite(total) && total >= 0 ? total : fallback;
+}
+
+async function pageDropEmails(env, newsId, offset = 0, limit = 100, q = "") {
   const pack = dropPackId(newsId, env);
-  const res = await sbFetch(env, `/rest/v1/drop_notify_emails?pack_id=eq.${encodeURIComponent(pack)}&select=email`, { method: "GET" });
-  if (!res.ok || !Array.isArray(res.data)) return [];
-  return [...new Set(res.data.map((row) => String(row?.email || "").trim().toLowerCase()).filter(Boolean))].sort();
+  const from = Math.max(0, Number(offset) || 0);
+  const size = Math.min(1000, Math.max(1, Number(limit) || 100));
+  const to = from + size - 1;
+  let path = `/rest/v1/drop_notify_emails?pack_id=eq.${encodeURIComponent(pack)}&select=email&order=email.asc`;
+  const needle = String(q || "").trim().toLowerCase().replace(/[*,]/g, "");
+  if (needle) path += `&email=ilike.${encodeURIComponent(`*${needle}*`)}`;
+  const res = await sbFetch(env, path, {
+    method: "GET",
+    extra: { Range: `${from}-${to}`, Prefer: "count=exact" },
+  });
+  if (!res.ok) {
+    const msg = errText(res.data) || `NOTIFY READ ${res.status}`;
+    const missing = /does not exist|schema cache|could not find/i.test(msg);
+    return { emails: [], n: 0, offset: from, error: missing ? "NOTIFY TABLE MISSING. PASTE sql/wears_drop_notify_emails.sql" : msg };
+  }
+  const emails = [...new Set((Array.isArray(res.data) ? res.data : []).map((row) => String(row?.email || "").trim().toLowerCase()).filter(Boolean))];
+  return { emails, n: parseCount(res.headers, from + emails.length), offset: from };
+}
+
+async function getDropState(env, newsId) {
+  const pack = dropPackId(newsId, env);
+  const res = await sbFetch(env, `/rest/v1/drop_notify_state?pack_id=eq.${encodeURIComponent(pack)}&select=sent_store_ids,lock_done,wave`, { method: "GET" });
+  const row = Array.isArray(res.data) ? res.data[0] : null;
+  const sent = Array.isArray(row?.sent_store_ids) ? row.sent_store_ids.map(String) : [];
+  return { sentStoreIds: [...new Set(sent)], lockDone: !!row?.lock_done, wave: row?.wave && typeof row.wave === "object" ? row.wave : null };
+}
+
+async function setDropWave(env, newsId, wave) {
+  const pack = dropPackId(newsId, env);
+  const cur = await getDropState(env, newsId);
+  await sbFetch(env, "/rest/v1/drop_notify_state?on_conflict=pack_id", {
+    extra: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: {
+      pack_id: pack,
+      sent_store_ids: cur.sentStoreIds,
+      lock_done: cur.lockDone,
+      wave,
+      updated_at: new Date().toISOString(),
+    },
+  });
+}
+
+async function tickDropFromDb(env) {
+  const jobs = [
+    {
+      newsId: env.VICE_NEWS_ID || "8cbc034c-8bee-4f9f-a7c9-9b32672e1e65",
+      at: env.VICE_AT || "2026-11-20T15:00:00Z",
+      storeIds: ["nba", "fanatics", "nike", "cactus"],
+    },
+    {
+      newsId: env.AF1_NEWS_ID || "75460ba6-0d53-402b-ad25-7a5a5a36dc7e",
+      at: env.AF1_AT || "2026-11-21T15:00:00Z",
+      storeIds: ["snkrs", "cactus"],
+    },
+  ];
+  for (const job of jobs) {
+    const at = Date.parse(job.at);
+    if (!Number.isFinite(at) || Date.now() < at) continue;
+    const state = await getDropState(env, job.newsId);
+    const remain = job.storeIds.filter((id) => !state.sentStoreIds.includes(id));
+    if (!remain.length) continue;
+    const storeId = state.wave?.storeId && remain.includes(String(state.wave.storeId))
+      ? String(state.wave.storeId)
+      : remain[0];
+    const cursor = state.wave?.storeId === storeId ? Number(state.wave.offset || 0) || 0 : 0;
+    const req = new Request(`https://twad.local/api/drop-card?newsId=${encodeURIComponent(job.newsId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ newsId: job.newsId, storeIds: [storeId], cursor }),
+    });
+    const res = await dropCardProxy(req, env);
+    const json = await res.json().catch(() => ({}));
+    if (json.done) await setDropWave(env, job.newsId, null);
+    else await setDropWave(env, job.newsId, { storeId, offset: Number(json.cursor || cursor) || 0 });
+    return json;
+  }
+  return { skipped: true };
+}
+
+async function markDropSent(env, newsId, storeIds) {
+  const pack = dropPackId(newsId, env);
+  const cur = await getDropState(env, newsId);
+  const sentStoreIds = [...new Set([...cur.sentStoreIds, ...storeIds.map(String)])];
+  await sbFetch(env, "/rest/v1/drop_notify_state?on_conflict=pack_id", {
+    extra: { Prefer: "resolution=merge-duplicates,return=minimal" },
+    body: {
+      pack_id: pack,
+      sent_store_ids: sentStoreIds,
+      lock_done: cur.lockDone,
+      wave: null,
+      updated_at: new Date().toISOString(),
+    },
+  });
+  return sentStoreIds;
 }
 
 async function dropCardProxy(request, env) {
@@ -580,38 +677,66 @@ async function dropCardProxy(request, env) {
     try { bodyObj = JSON.parse(payload); } catch { bodyObj = {}; }
   }
   const packNewsId = newsId || String(bodyObj.newsId || "");
-  const dbEmails = await listDropEmails(env, packNewsId);
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    bodyObj.newsId = packNewsId || bodyObj.newsId;
-    bodyObj.emails = [...new Set([...(Array.isArray(bodyObj.emails) ? bodyObj.emails : []), ...dbEmails])];
-    payload = JSON.stringify(bodyObj);
+  const state = await getDropState(env, packNewsId);
+  if (request.method === "GET" || request.method === "HEAD") {
+    const offset = Math.max(0, Number(src.searchParams.get("offset") || 0) || 0);
+    const limit = Math.min(200, Math.max(20, Number(src.searchParams.get("limit") || 100) || 100));
+    const page = await pageDropEmails(env, packNewsId, offset, limit, src.searchParams.get("q") || "");
+    if (page.error) return json(503, { error: page.error, n: 0, emails: [] });
+    return json(200, {
+      ok: true,
+      newsId: dropPackId(packNewsId, env),
+      n: page.n,
+      emails: page.emails,
+      offset: page.offset,
+      limit,
+      hasMore: page.offset + page.emails.length < page.n,
+      sentStoreIds: state.sentStoreIds,
+      lockDone: state.lockDone,
+    });
   }
+  const storeIds = Array.isArray(bodyObj.storeIds) ? bodyObj.storeIds.map(String) : [];
+  if (!bodyObj.again && storeIds.length && storeIds.every((id) => state.sentStoreIds.includes(id))) {
+    return json(200, { already: true, sentStoreIds: state.sentStoreIds, storeIds });
+  }
+  const offset = Math.max(0, Number(bodyObj.cursor || 0) || 0);
+  const page = await pageDropEmails(env, packNewsId, offset, 40);
+  if (page.error) return json(503, { error: page.error });
+  if (!page.n) return json(200, { empty: true, n: 0, cursor: 0, total: 0, done: true, sentStoreIds: state.sentStoreIds });
+  const next = offset + page.emails.length;
+  const done = next >= page.n || !page.emails.length;
+  bodyObj.newsId = packNewsId || bodyObj.newsId;
+  bodyObj.emails = page.emails;
+  bodyObj.batch = true;
+  bodyObj.cursor = next;
+  bodyObj.total = page.n;
+  bodyObj.done = done;
   const init = {
-    method: request.method,
+    method: "POST",
     headers: {
       Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
     },
+    body: JSON.stringify(bodyObj),
   };
-  if (request.method !== "GET" && request.method !== "HEAD") init.body = payload;
   try {
     const res = await fetch(href.toString(), init);
     const text = await res.text();
-    if (request.method === "GET") {
-      let json = {};
-      try { json = JSON.parse(text); } catch { json = {}; }
-      const emails = [...new Set([...(Array.isArray(json.emails) ? json.emails : []), ...dbEmails]
-        .map((e) => String(e || "").trim().toLowerCase()).filter(Boolean))].sort();
-      json.ok = json.ok !== false;
-      json.emails = emails;
-      json.n = emails.length;
-      return locked(res.ok ? 200 : res.status, JSON.stringify(json), "application/json; charset=utf-8");
+    let jsonOut = {};
+    try { jsonOut = JSON.parse(text); } catch { jsonOut = { error: text || `SEND ${res.status}` }; }
+    if (!res.ok) return locked(res.status, JSON.stringify(jsonOut), "application/json; charset=utf-8");
+    jsonOut.cursor = next;
+    jsonOut.total = page.n;
+    jsonOut.done = done;
+    jsonOut.n = page.n;
+    if (done) {
+      const storeIds = Array.isArray(bodyObj.storeIds) ? bodyObj.storeIds : [];
+      jsonOut.sentStoreIds = await markDropSent(env, packNewsId, storeIds);
+    } else {
+      jsonOut.sentStoreIds = state.sentStoreIds;
     }
-    return locked(res.status, text, "application/json; charset=utf-8");
+    return json(200, jsonOut);
   } catch (err) {
-    if (request.method === "GET" && dbEmails.length) {
-      return json(200, { ok: true, newsId: packNewsId, n: dbEmails.length, emails: dbEmails, sentStoreIds: [] });
-    }
     return json(502, { error: String(err && err.message || err) });
   }
 }
@@ -689,11 +814,7 @@ export default {
     return withLockHeaders(await env.ASSETS.fetch(request));
   },
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(fetch("https://thewearson.com/api/drop-tick", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    }).catch((err) => console.log("drop-tick", err && err.message)));
+    ctx.waitUntil(tickDropFromDb(env).catch((err) => console.log("drop-tick", err && err.message)));
   },
 };
 

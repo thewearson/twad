@@ -38,6 +38,9 @@
   let dropOn = false;
   let dropDefault = 0;
   let dropSending = false;
+  let dropEmailOffset = 0;
+  let dropEmailN = 0;
+  let dropEmailQ = "";
   let dropSentIds = new Set();
   const AVAIL = [
     { id: "in_stock", label: "IN STOCK" },
@@ -1942,6 +1945,11 @@
     paintDropToggle();
     paintDropDefault();
     paintDropHint();
+    dropEmailOffset = 0;
+    dropEmailN = 0;
+    dropEmailQ = "";
+    const qel = document.getElementById("drop-email-q");
+    if (qel) qel.value = "";
     dropCardStatus();
   }
   function studioStoreId(label, url, fallback) {
@@ -2004,50 +2012,56 @@
     }
   }
 
-  function paintDropEmails(emails) {
+  function paintDropEmails(emails, opt = {}) {
     const list = document.getElementById("drop-email-list");
+    const more = document.getElementById("drop-email-more");
     if (!list) return;
-    list.replaceChildren();
-    const rows = [...new Set((Array.isArray(emails) ? emails : []).map((e) => String(e || "").trim().toLowerCase()).filter(Boolean))].sort();
-    if (!rows.length) {
+    if (!opt.append) list.replaceChildren();
+    const rows = [...new Set((Array.isArray(emails) ? emails : []).map((e) => String(e || "").trim().toLowerCase()).filter(Boolean))];
+    if (!opt.append && !rows.length) {
       const empty = document.createElement("li");
       empty.className = "is-empty";
       empty.textContent = "NONE YET";
       list.appendChild(empty);
-      return;
+    } else {
+      for (const addr of rows) {
+        const li = document.createElement("li");
+        li.textContent = addr;
+        list.appendChild(li);
+      }
     }
-    for (const addr of rows) {
-      const li = document.createElement("li");
-      li.textContent = addr;
-      list.appendChild(li);
-    }
+    if (more) more.hidden = !opt.hasMore;
   }
 
-  async function dropCardStatus() {
+  async function dropCardStatus(opt = {}) {
     const msg = document.getElementById("drop-card-msg");
+    const append = !!opt.append;
+    const offset = append ? dropEmailOffset : 0;
     try {
-      const q = editingNews?.id ? `?newsId=${encodeURIComponent(editingNews.id)}` : "";
-      const res = await fetch(`/api/drop-card${q}`, { credentials: "same-origin" });
+      const params = new URLSearchParams();
+      if (editingNews?.id) params.set("newsId", editingNews.id);
+      params.set("offset", String(offset));
+      params.set("limit", "100");
+      if (dropEmailQ) params.set("q", dropEmailQ);
+      const res = await fetch(`/api/drop-card?${params}`, { credentials: "same-origin" });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (msg) msg.textContent = json.error || `CARD STATUS ${res.status}`;
-        paintDropEmails([]);
+        if (!append) paintDropEmails([]);
         paintDropSendButtons();
         return json;
       }
       dropSentIds = new Set(json.sentStoreIds || []);
       const emails = Array.isArray(json.emails) ? json.emails : [];
-      const n = emails.length || Number(json.n || 0);
-      if (msg) {
-        const wave = json.wave && !json.wave.done ? ` · SENDING ${(json.wave.storeIds || []).join(" / ").toUpperCase()}` : "";
-        msg.textContent = n ? `${n} NOTIFY EMAILS ARMED${wave}` : "NO NOTIFY EMAILS YET";
-      }
-      paintDropEmails(emails);
+      dropEmailN = Number(json.n || 0);
+      dropEmailOffset = offset + emails.length;
+      if (msg) msg.textContent = dropEmailN ? `${dropEmailN} NOTIFY EMAILS ARMED` : "NO NOTIFY EMAILS YET";
+      paintDropEmails(emails, { append, hasMore: !!json.hasMore });
       paintDropSendButtons();
       return json;
     } catch (err) {
       if (msg) msg.textContent = err.message || "CARD STATUS FAILED";
-      paintDropEmails([]);
+      if (!append) paintDropEmails([]);
       paintDropSendButtons();
       return {};
     }
@@ -2090,13 +2104,14 @@
         again = true;
       }
       let safety = 0;
-      while (safety < 400) {
+      let cursor = 0;
+      while (safety < 3000) {
         safety += 1;
         const res = await fetch("/api/drop-card", {
           method: "POST",
           credentials: "same-origin",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ newsId: editingNews.id, storeIds: [store.id], again }),
+          body: JSON.stringify({ newsId: editingNews.id, storeIds: [store.id], again, cursor }),
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(json.error || `SEND ${res.status}`);
@@ -2113,7 +2128,7 @@
           snack("NO NOTIFY EMAILS YET.", true);
           break;
         }
-        const cursor = Number(json.cursor || 0);
+        cursor = Number(json.cursor || cursor);
         const total = Number(json.total || 0);
         if (msg) msg.textContent = `SENDING ${store.label.toUpperCase()} · ${cursor}/${total || "?"}`;
         if (Array.isArray(json.sentStoreIds)) dropSentIds = new Set(json.sentStoreIds);
@@ -3454,8 +3469,17 @@
   });
   document.getElementById("drop-fields")?.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-drop-send]");
-    if (!btn) return;
-    sendDropStoreCard(Number(btn.getAttribute("data-drop-send")));
+    if (btn) {
+      sendDropStoreCard(Number(btn.getAttribute("data-drop-send")));
+      return;
+    }
+    if (e.target.closest("#drop-email-more")) dropCardStatus({ append: true });
+  });
+  let dropSearchTimer = 0;
+  document.getElementById("drop-email-q")?.addEventListener("input", (e) => {
+    dropEmailQ = String(e.target.value || "").trim().toLowerCase();
+    clearTimeout(dropSearchTimer);
+    dropSearchTimer = setTimeout(() => dropCardStatus(), 250);
   });
   document.getElementById("tables-back").addEventListener("click", () => {
     showDesk();

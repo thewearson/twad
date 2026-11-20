@@ -749,10 +749,19 @@ label {
   display: block;
   margin-bottom: 10px;
 }
+.drop-emails input {
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 800;
+}
 .drop-emails ol {
   list-style: none;
   margin: 0;
   padding: 0;
+  max-height: 320px;
+  overflow: auto;
 }
 .drop-emails li {
   border-top: 1.5px solid var(--ink);
@@ -768,6 +777,19 @@ label {
   letter-spacing: 1.2px;
   text-transform: uppercase;
   color: var(--ink54);
+}
+.drop-email-more {
+  width: 100%;
+  margin: 8px 0 10px;
+  min-height: 36px;
+  border: 1.5px solid var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  cursor: pointer;
 }
 @media (max-width: 720px) {
   .drop-store { grid-template-columns: 1fr; }

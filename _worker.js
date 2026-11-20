@@ -546,6 +546,22 @@ async function dropNotifyResponse(request, env) {
   return corsJson(request, 200, { ok: true, on: !off });
 }
 
+function dropPackId(raw, env) {
+  const id = String(raw || env.VICE_NEWS_ID || "8cbc034c-8bee-4f9f-a7c9-9b32672e1e65").trim().toLowerCase();
+  const af1 = new Set([
+    String(env.AF1_NEWS_ID || "75460ba6-0d53-402b-ad25-7a5a5a36dc7e").toLowerCase(),
+    String(env.AF1_SHAPE_ID || "93e33b2f-e4e0-494d-b43d-34609210ab13").toLowerCase(),
+  ]);
+  return af1.has(id) ? String(env.AF1_NEWS_ID || "75460ba6-0d53-402b-ad25-7a5a5a36dc7e").toLowerCase() : id;
+}
+
+async function listDropEmails(env, newsId) {
+  const pack = dropPackId(newsId, env);
+  const res = await sbFetch(env, `/rest/v1/drop_notify_emails?pack_id=eq.${encodeURIComponent(pack)}&select=email`, { method: "GET" });
+  if (!res.ok || !Array.isArray(res.data)) return [];
+  return [...new Set(res.data.map((row) => String(row?.email || "").trim().toLowerCase()).filter(Boolean))].sort();
+}
+
 async function dropCardProxy(request, env) {
   const key = (await readSecret(env.DROP_STUDIO_KEY)) || (await readSecret(env.GMAIL_APP_PASSWORD));
   if (!key) {
@@ -555,6 +571,21 @@ async function dropCardProxy(request, env) {
   const href = new URL("https://thewearson.com/api/drop-studio");
   const newsId = String(src.searchParams.get("newsId") || "").trim();
   if (newsId) href.searchParams.set("newsId", newsId);
+  let payload = "";
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    payload = await request.text();
+  }
+  let bodyObj = {};
+  if (payload) {
+    try { bodyObj = JSON.parse(payload); } catch { bodyObj = {}; }
+  }
+  const packNewsId = newsId || String(bodyObj.newsId || "");
+  const dbEmails = await listDropEmails(env, packNewsId);
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    bodyObj.newsId = packNewsId || bodyObj.newsId;
+    bodyObj.emails = [...new Set([...(Array.isArray(bodyObj.emails) ? bodyObj.emails : []), ...dbEmails])];
+    payload = JSON.stringify(bodyObj);
+  }
   const init = {
     method: request.method,
     headers: {
@@ -562,14 +593,25 @@ async function dropCardProxy(request, env) {
       "Content-Type": "application/json",
     },
   };
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    init.body = await request.text();
-  }
+  if (request.method !== "GET" && request.method !== "HEAD") init.body = payload;
   try {
     const res = await fetch(href.toString(), init);
     const text = await res.text();
+    if (request.method === "GET") {
+      let json = {};
+      try { json = JSON.parse(text); } catch { json = {}; }
+      const emails = [...new Set([...(Array.isArray(json.emails) ? json.emails : []), ...dbEmails]
+        .map((e) => String(e || "").trim().toLowerCase()).filter(Boolean))].sort();
+      json.ok = json.ok !== false;
+      json.emails = emails;
+      json.n = emails.length;
+      return locked(res.ok ? 200 : res.status, JSON.stringify(json), "application/json; charset=utf-8");
+    }
     return locked(res.status, text, "application/json; charset=utf-8");
   } catch (err) {
+    if (request.method === "GET" && dbEmails.length) {
+      return json(200, { ok: true, newsId: packNewsId, n: dbEmails.length, emails: dbEmails, sentStoreIds: [] });
+    }
     return json(502, { error: String(err && err.message || err) });
   }
 }

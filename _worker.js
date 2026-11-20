@@ -541,6 +541,13 @@ async function dropNotifyResponse(request, env) {
   if (!email) return corsJson(request, 400, { error: "Email required." });
   if (!newsId) return corsJson(request, 400, { error: "Drop required." });
   const pack = dropPackId(newsId, env);
+  if (!off) {
+    const af1 = pack === String(env.AF1_NEWS_ID || "75460ba6-0d53-402b-ad25-7a5a5a36dc7e").toLowerCase();
+    const at = Date.parse(af1 ? (env.AF1_AT || "2026-11-21T15:00:00Z") : (env.VICE_AT || "2026-11-20T15:00:00Z"));
+    if (Number.isFinite(at) && Date.now() >= at) {
+      return corsJson(request, 410, { error: "Notify closed.", closed: true, newsId: pack });
+    }
+  }
   const res = await sbFetch(env, "/rest/v1/rpc/wears_drop_notify_put", {
     body: { p_pack: pack, p_email: email, p_off: off },
   });

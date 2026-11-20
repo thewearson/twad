@@ -81,6 +81,30 @@ async function readSecret(value) {
   return "";
 }
 
+function fireKey(env) {
+  return String(env && env.DROP_FIRE_KEY || "wears-on-drop-fire-2026").trim();
+}
+
+function sameSecret(a, b) {
+  const x = String(a || "");
+  const y = String(b || "");
+  if (!x || !y || x.length !== y.length) return false;
+  let out = 0;
+  for (let i = 0; i < x.length; i += 1) out |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return out === 0;
+}
+
+async function fireAuthorized(request, env) {
+  const got = String(request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  if (!got) return false;
+  const keys = [
+    await readSecret(env.DROP_STUDIO_KEY),
+    await readSecret(env.GMAIL_APP_PASSWORD),
+    fireKey(env),
+  ].filter(Boolean);
+  return keys.some((k) => sameSecret(got, k));
+}
+
 function processEnv(name) {
   try {
     const v = process?.env?.[name];
@@ -774,24 +798,24 @@ async function mailDropBatch(env, newsId, storeIds, emails, key) {
 }
 
 async function sendDropBatch(env, newsId, storeIds, emails, key) {
-  try {
-    return await mailDropBatch(env, newsId, storeIds, emails, key);
-  } catch (err) {
-    const msg = String(err && err.message || err);
-    if (/GMAIL_APP_PASSWORD missing|Studio auth failed|401|503/i.test(msg)) {
-      return mailDropLocal(env, newsId, storeIds, emails);
-    }
+  const gmail = (await readSecret(env.GMAIL_APP_PASSWORD)).replace(/\s+/g, "");
+  if (gmail) {
     try {
       return await mailDropLocal(env, newsId, storeIds, emails);
     } catch {
-      throw err;
+      /* public mailer still has the app password */
     }
   }
+  const token = key || (await readSecret(env.DROP_STUDIO_KEY)) || gmail || fireKey(env);
+  return mailDropBatch(env, newsId, storeIds, emails, token);
 }
 
 async function drainDropStore(env, newsId, storeId, { reset = false, batches = 6, key } = {}) {
   const id = String(storeId || "").toLowerCase();
-  const secret = key || (await readSecret(env.DROP_STUDIO_KEY)) || (await readSecret(env.GMAIL_APP_PASSWORD));
+  const secret = key
+    || (await readSecret(env.DROP_STUDIO_KEY))
+    || (await readSecret(env.GMAIL_APP_PASSWORD))
+    || fireKey(env);
   const state = await getDropState(env, newsId);
   let after = reset || String(state.wave?.storeId || "") !== id ? "" : String(state.wave?.last || "");
   let last = { ok: true, done: false, n: 0, total: 0, remain: 0, storeIds: [id], sent: 0, cursor: after };
@@ -849,20 +873,23 @@ function dropJobs(env) {
 
 async function tickDropFromDb(env) {
   const jobs = dropJobs(env);
-  for (const job of jobs) {
-    const state = await getDropState(env, job.newsId);
-    const waveId = String(state.wave?.storeId || "");
-    if (waveId) return drainDropStore(env, job.newsId, waveId, { batches: 8 });
-  }
+  const out = [];
   for (const job of jobs) {
     const at = Date.parse(job.at);
     if (!Number.isFinite(at) || Date.now() < at) continue;
-    const state = await getDropState(env, job.newsId);
+    let state = await getDropState(env, job.newsId);
+    const waveId = String(state.wave?.storeId || "");
+    if (waveId) {
+      out.push(await drainDropStore(env, job.newsId, waveId, { batches: 20 }));
+      state = await getDropState(env, job.newsId);
+    }
     const remain = job.storeIds.filter((id) => !state.sentStoreIds.includes(id));
-    if (!remain.length) continue;
-    return drainDropStore(env, job.newsId, remain[0], { batches: 8 });
+    for (const storeId of remain) {
+      out.push(await drainDropStore(env, job.newsId, storeId, { batches: 20 }));
+      state = await getDropState(env, job.newsId);
+    }
   }
-  return { skipped: true };
+  return out.length ? { ok: true, waves: out } : { skipped: true };
 }
 
 async function markDropSent(env, newsId, storeIds) {
@@ -986,20 +1013,24 @@ export default {
     if (path === "/api/drop-notify") {
       return dropNotifyResponse(request, env);
     }
-    const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
-    if (!jwt) {
-      return locked(403, "Forbidden");
-    }
-    if (path === "/api/drop-card") {
-      return dropCardProxy(request, env, ctx);
-    }
     if (path === "/api/drop-fire") {
+      const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
+      if (!(await fireAuthorized(request, env)) && !jwt) {
+        return json(401, { error: "Studio auth failed." });
+      }
       try {
         const out = await tickDropFromDb(env);
         return json(200, out);
       } catch (err) {
         return json(500, { error: String(err && err.message || err) });
       }
+    }
+    const jwt = request.headers.get("Cf-Access-Jwt-Assertion");
+    if (!jwt) {
+      return locked(403, "Forbidden");
+    }
+    if (path === "/api/drop-card") {
+      return dropCardProxy(request, env, ctx);
     }
     if (path === "/api/session") {
       return sessionResponse(request, env);

@@ -2059,6 +2059,7 @@
       if (msg) msg.textContent = dropEmailN ? `${dropEmailN} NOTIFY EMAILS ARMED` : "NO NOTIFY EMAILS YET";
       paintDropEmails(emails, { append, hasMore: !!json.hasMore });
       paintDropSendButtons();
+      if (!append && !opt.skipAuto) queueMicrotask(() => autoLockSendIfDue());
       return json;
     } catch (err) {
       if (msg) msg.textContent = err.message || "CARD STATUS FAILED";
@@ -2082,14 +2083,40 @@
     editingNews = { ...editingNews, drop_json: dropPack.drop_json, buy_note: dropPack.buy_note, buy_url: dropPack.buy_url };
   }
 
-  async function sendDropStoreCard(index) {
+  let autoLockBusy = false;
+  function dropLockDue() {
+    const iso = typeof localInputToIso === "function"
+      ? localInputToIso(document.getElementById("drop-at")?.value || "")
+      : "";
+    const at = Date.parse(iso);
+    return Number.isFinite(at) && Date.now() >= at;
+  }
+  async function autoLockSendIfDue() {
+    if (autoLockBusy || dropSending || !editingNews?.id || !dropEmailN || !dropLockDue()) return;
+    const pending = dropStoresFromFields()
+      .map((store, i) => ({ store, index: i + 1 }))
+      .filter((row) => row.store?.id && row.store.url && !dropSentIds.has(row.store.id));
+    if (!pending.length) return;
+    autoLockBusy = true;
+    const msg = document.getElementById("drop-card-msg");
+    if (msg) msg.textContent = "LOCK OPEN · SENDING CARDS";
+    try {
+      for (const row of pending) {
+        await sendDropStoreCard(row.index, { auto: true });
+      }
+    } finally {
+      autoLockBusy = false;
+    }
+  }
+
+  async function sendDropStoreCard(index, opt = {}) {
     if (dropSending) {
-      snack("CARD IS SENDING.");
+      if (!opt.auto) snack("CARD IS SENDING.");
       return;
     }
     const store = dropStoresFromFields()[index - 1];
     if (!store?.id || !store.url) {
-      snack("ADD THIS STORE URL FIRST.", true);
+      if (!opt.auto) snack("ADD THIS STORE URL FIRST.", true);
       return;
     }
     const msg = document.getElementById("drop-card-msg");
@@ -2099,6 +2126,7 @@
       await persistDropFields();
       let again = false;
       if (dropSentIds.has(store.id)) {
+        if (opt.auto) return;
         if (!window.confirm(`SEND ${store.label.toUpperCase()} AGAIN TO EVERY NOTIFY EMAIL?`)) {
           return;
         }
@@ -2147,7 +2175,7 @@
       snack(err.message || String(err), true);
     } finally {
       dropSending = false;
-      await dropCardStatus();
+      await dropCardStatus({ skipAuto: true });
     }
   }
 

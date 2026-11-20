@@ -2046,7 +2046,8 @@
       const res = await fetch(`/api/drop-card?${params}`, { credentials: "same-origin" });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        if (msg) msg.textContent = json.error || `CARD STATUS ${res.status}`;
+        const armed = Number(json.n || 0);
+        if (msg) msg.textContent = json.error || (armed ? `${armed} ARMED · STUDIO CANNOT READ THEM` : `CARD STATUS ${res.status}`);
         if (!append) paintDropEmails([]);
         paintDropSendButtons();
         return json;

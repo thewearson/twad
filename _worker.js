@@ -384,10 +384,14 @@ async function sessionResponse(request, env) {
 }
 
 const VICE_STORES = [
-  { label: "NBA Store", url: "https://store.nba.com" },
-  { label: "Fanatics", url: "https://www.fanatics.com/nba/o-1370+z-938737729-293541727" },
-  { label: "Nike SNKRS", url: "https://www.nike.com/launch" },
-  { label: "Cactus Jack", url: "https://shop.travisscott.com" },
+  { id: "nba", label: "NBA Store", url: "https://store.nba.com" },
+  { id: "fanatics", label: "Fanatics", url: "https://www.fanatics.com/nba/o-1370+z-938737729-293541727" },
+  { id: "nike", label: "Nike SNKRS", url: "https://www.nike.com/launch" },
+  { id: "cactus", label: "Cactus Jack", url: "https://shop.travisscott.com" },
+];
+const AF1_STORES = [
+  { id: "snkrs", label: "Nike SNKRS", url: "https://www.nike.com/launch" },
+  { id: "cactus", label: "Cactus Jack", url: "https://shop.travisscott.com" },
 ];
 
 function corsHeaders(request) {
@@ -478,10 +482,12 @@ async function smtpSend(env, { recipients, subject, text, html }) {
     if (r.code !== 250) throw new Error(r.line);
     r = await cmd(`RCPT TO:<${user}>`);
     if (r.code !== 250) throw new Error(r.line);
+    let accepted = 0;
     for (const to of toList) {
       r = await cmd(`RCPT TO:<${to}>`);
-      if (r.code !== 250 && r.code !== 251) throw new Error(`${to}: ${r.line}`);
+      if (r.code === 250 || r.code === 251) accepted += 1;
     }
+    if (!accepted) throw new Error("No valid recipients.");
     r = await cmd("DATA");
     if (r.code !== 354) throw new Error(r.line);
     const payload = [
@@ -611,49 +617,128 @@ async function setDropWave(env, newsId, wave) {
   });
 }
 
-async function claimDropEmails(env, newsId, storeId, { reset = false, limit = 40 } = {}) {
+async function countDropArmed(env, newsId) {
   const pack = dropPackId(newsId, env);
-  const res = await sbFetch(env, "/rest/v1/rpc/wears_drop_notify_claim", {
-    body: {
-      p_pack: pack,
-      p_store: String(storeId || "").toLowerCase(),
-      p_limit: Math.min(40, Math.max(1, Number(limit) || 40)),
-      p_reset: !!reset,
-    },
+  const res = await sbFetch(env, "/rest/v1/rpc/wears_drop_notify_put", {
+    body: { p_pack: pack, p_email: "tw-count-probe@thewearson.com", p_off: true },
   });
-  if (!res.ok) {
-    const msg = errText(res.data) || `NOTIFY CLAIM ${res.status}`;
-    const missing = /could not find|does not exist|schema cache/i.test(msg);
-    return {
-      emails: [],
-      remain: 0,
-      armed: 0,
-      done: false,
-      empty: false,
-      error: missing ? "NOTIFY TABLE MISSING. PASTE sql/wears_drop_notify_emails.sql" : msg,
-    };
-  }
-  const data = res.data && typeof res.data === "object" && !Array.isArray(res.data) ? res.data : {};
-  const emails = [...new Set((Array.isArray(data.emails) ? data.emails : []).map((e) => cleanEmail(e)).filter(Boolean))];
-  return {
-    emails,
-    remain: Number(data.remain || 0) || 0,
-    armed: Number(data.armed || 0) || 0,
-    done: data.done === true,
-    empty: data.empty === true,
-  };
+  if (!res.ok) return 0;
+  return Number(res.data && res.data.n) || 0;
 }
 
-async function markDropEmails(env, newsId, storeId, emails) {
-  const pack = dropPackId(newsId, env);
-  let last = { ok: false };
-  for (let i = 0; i < 4; i += 1) {
-    last = await sbFetch(env, "/rest/v1/rpc/wears_drop_notify_mark", {
-      body: { p_pack: pack, p_store: String(storeId || "").toLowerCase(), p_emails: emails },
-    });
-    if (last.ok) return last;
+function parseDropNote(note) {
+  const lines = String(note || "").split(/\r?\n/);
+  const stores = [];
+  let at = "";
+  let off = false;
+  for (const line of lines) {
+    const t0 = line.trim();
+    if (!t0) continue;
+    if (/^AT\s+OFF$/i.test(t0) || /^DROP_OFF$/i.test(t0)) { off = true; continue; }
+    const atM = t0.match(/^AT\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z?)\s*$/i);
+    if (atM) { at = atM[1].endsWith("Z") ? atM[1] : `${atM[1]}Z`; continue; }
+    const sm = t0.match(/^(.+?)\s+(https?:\/\/\S+)\s*$/i);
+    if (sm) stores.push({ label: sm[1].trim(), url: sm[2].trim() });
   }
-  return last;
+  return { at, stores, off };
+}
+
+function hrefAbs(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const url = /^https?:\/\//i.test(s) ? s : `https://${s.replace(/^\/+/, "")}`;
+  if (!/^https?:\/\//i.test(url)) return "";
+  return url.replace(/"/g, "%22");
+}
+
+function escHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function overlayStoreList(base, listed) {
+  const byId = {};
+  const byUrl = {};
+  for (const s of listed || []) {
+    const url = hrefAbs(s.url);
+    const label = String(s.label || "").trim();
+    if (!url || !label) continue;
+    const id = String(s.id || "").toLowerCase();
+    if (id) byId[id] = { id, label, url };
+    byUrl[url.replace(/\/+$/, "")] = { id, label, url };
+  }
+  return (base || []).map((b) => {
+    const u = hrefAbs(b.url).replace(/\/+$/, "");
+    const hit = byId[b.id] || (b.id === "snkrs" ? byId.nike : null) || byUrl[u] || {};
+    return { id: b.id, label: hit.label || b.label, url: hit.url || b.url };
+  });
+}
+
+async function loadDropCard(env, newsId, storeIds) {
+  const pack = dropPackId(newsId, env);
+  const af1 = pack === String(env.AF1_NEWS_ID || "75460ba6-0d53-402b-ad25-7a5a5a36dc7e").toLowerCase();
+  const base = af1 ? AF1_STORES : VICE_STORES;
+  const want = new Set((storeIds || []).map((id) => String(id || "").toLowerCase()).filter(Boolean));
+  const res = await sbFetch(env, `/rest/v1/drip_news?id=eq.${encodeURIComponent(pack)}&select=id,title,product_name,buy_note,buy_url`, { method: "GET" });
+  const row = Array.isArray(res.data) ? res.data[0] : null;
+  const packed = parseDropNote(row?.buy_note);
+  const stores = overlayStoreList(base, packed.stores).filter((s) => (!want.size || want.has(s.id)) && s.url);
+  const title = String(row?.product_name || row?.title || (af1
+    ? "GTA 6 × TRAVIS SCOTT - ONLY 600 PAIRS OF THE MULTICOLOR AF1"
+    : "MIAMI HEAT × CACTUS JACK × NIKE × GTA VI"));
+  const when = af1 ? "21 NOV 2026 · 10:00 AM ET" : "20 NOV 2026 · 10:00 AM ET";
+  return { newsId: pack, title, when, stores };
+}
+
+function dropCardSubject(stores) {
+  const one = Array.isArray(stores) && stores.length === 1 ? stores[0].label : "";
+  return one ? `DROP LOCK OPENED — ${String(one).toUpperCase()}` : "DROP LOCK OPENED — THE WEARS ON";
+}
+
+function dropCardHtml(wave) {
+  const newsId = wave.newsId || "8cbc034c-8bee-4f9f-a7c9-9b32672e1e65";
+  const slug = String(wave.title || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || newsId;
+  const page = `https://thewearson.com/#/n/${slug}`;
+  const stores = Array.isArray(wave.stores) ? wave.stores : [];
+  const title = escHtml(String(wave.title || "").toUpperCase());
+  const when = escHtml(wave.when || "20 NOV 2026 · 10:00 AM ET");
+  const face = "'Inter Tight', Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif";
+  const storeRows = stores.map((s, i) => {
+    const on = i === 0;
+    const border = i === stores.length - 1 ? "0" : "1.5px solid #000000";
+    const bg = on ? "#000000" : "#ffffff";
+    const fg = on ? "#ffffff" : "#000000";
+    return `<tr>
+      <td style="border-bottom:${border};padding:0;background:${bg}">
+        <a href="${hrefAbs(s.url)}" style="display:block;padding:20px 16px;font-family:${face};font-size:12px;font-weight:900;letter-spacing:2.4px;line-height:1;text-transform:uppercase;color:${fg};text-decoration:none;text-align:center">${escHtml(s.label)}</a>
+      </td>
+    </tr>`;
+  }).join("");
+  return `<!doctype html><html><body style="margin:0;padding:0;background:#f5f5f5;color:#000000">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f5f5f5"><tr><td align="center" style="padding:36px 12px 48px">
+  <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="width:560px;max-width:560px;background:#000000"><tr><td style="padding:0 0 10px 10px">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border:2px solid #000000;margin:-10px 10px 10px -10px">
+    <tr><td align="center" height="56" style="height:56px;background:#000000;color:#ffffff;padding:18px 16px;font-family:${face};font-size:10px;font-weight:900;letter-spacing:2px">THE DROP CARD</td></tr>
+    <tr><td align="center" style="padding:36px 20px 28px">
+      <h1 style="margin:0;font-family:${face};font-size:48px;line-height:0.92;font-weight:900;letter-spacing:1.2px;text-transform:uppercase;color:#000000">DROP LOCK<br>OPENED</h1>
+      <span style="display:inline-block;margin-top:16px;padding:6px 10px;border:1.5px solid #000000;background:#000000;color:#ffffff;font-family:${face};font-size:8px;font-weight:900;letter-spacing:1.5px">MEMBER</span>
+      <p style="margin:18px 0 0;font-family:${face};font-size:11px;font-weight:900;letter-spacing:1.2px;text-transform:uppercase;color:#000000">${title}</p>
+      <p style="margin:10px 0 0;font-family:Inter, ${face};font-size:10px;font-weight:900;letter-spacing:1.8px;color:#000000">${when}</p>
+    </td></tr>
+    <tr><td style="border-top:1.5px solid #000000"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${storeRows}</table></td></tr>
+    <tr><td align="center" height="48" style="height:48px;background:#000000;color:#ffffff;padding:16px;font-family:${face};font-size:11px;font-weight:900;letter-spacing:2px"><a href="${page}" style="color:#ffffff;text-decoration:none">THE WEARS ON</a></td></tr>
+  </table></td></tr></table></td></tr></table></body></html>`;
+}
+
+async function mailDropLocal(env, newsId, storeIds, emails) {
+  const live = await loadDropCard(env, newsId, storeIds);
+  if (!live.stores.length) throw new Error("No matching live store URLs. Save the dispatch first.");
+  const subject = dropCardSubject(live.stores);
+  const html = dropCardHtml(live);
+  const text = `${live.title}\n${live.when}\n${live.stores.map((s) => `${s.label}: ${s.url}`).join("\n")}`;
+  return smtpSend(env, { recipients: emails, subject, text, html });
 }
 
 async function mailDropBatch(env, newsId, storeIds, emails, key) {
@@ -681,42 +766,61 @@ async function mailDropBatch(env, newsId, storeIds, emails, key) {
   return jsonOut;
 }
 
+async function sendDropBatch(env, newsId, storeIds, emails, key) {
+  try {
+    return await mailDropBatch(env, newsId, storeIds, emails, key);
+  } catch (err) {
+    const msg = String(err && err.message || err);
+    if (/GMAIL_APP_PASSWORD missing|Studio auth failed|401|503/i.test(msg)) {
+      return mailDropLocal(env, newsId, storeIds, emails);
+    }
+    try {
+      return await mailDropLocal(env, newsId, storeIds, emails);
+    } catch {
+      throw err;
+    }
+  }
+}
+
 async function drainDropStore(env, newsId, storeId, { reset = false, batches = 6, key } = {}) {
   const id = String(storeId || "").toLowerCase();
   const secret = key || (await readSecret(env.DROP_STUDIO_KEY)) || (await readSecret(env.GMAIL_APP_PASSWORD));
-  if (!secret) return { error: "Set GMAIL_APP_PASSWORD (or DROP_STUDIO_KEY) on Studio so cards can send." };
-  let resetOnce = !!reset;
-  let last = { ok: true, done: false, n: 0, total: 0, remain: 0, storeIds: [id], sent: 0 };
+  const state = await getDropState(env, newsId);
+  let after = reset || String(state.wave?.storeId || "") !== id ? "" : String(state.wave?.last || "");
+  let last = { ok: true, done: false, n: 0, total: 0, remain: 0, storeIds: [id], sent: 0, cursor: after };
   for (let i = 0; i < batches; i += 1) {
-    const claimed = await claimDropEmails(env, newsId, id, { reset: resetOnce, limit: 40 });
-    resetOnce = false;
-    if (claimed.error) return { error: claimed.error };
-    last.n = claimed.armed;
-    last.total = claimed.armed;
-    last.remain = claimed.remain;
-    if (!claimed.armed) {
+    const page = await pageDropEmails(env, newsId, 0, 40, "", after);
+    if (page.error) return { error: page.error };
+    last.n = page.n;
+    last.total = page.n;
+    if (!page.n) {
+      const armed = await countDropArmed(env, newsId);
+      if (armed > 0) {
+        return {
+          error: "NOTIFY LIST IS IN THE DATABASE BUT STUDIO CANNOT READ IT. PASTE service_role IN STUDIO VAULT.",
+          n: armed,
+          total: armed,
+        };
+      }
       await setDropWave(env, newsId, null);
       return { ...last, empty: true, done: true };
     }
-    if (!claimed.emails.length) {
-      if (claimed.remain === 0) {
-        const sentStoreIds = await markDropSent(env, newsId, [id]);
-        await setDropWave(env, newsId, null);
-        return { ...last, done: true, remain: 0, sentStoreIds };
-      }
-      return last;
+    if (!page.emails.length) {
+      const sentStoreIds = await markDropSent(env, newsId, [id]);
+      await setDropWave(env, newsId, null);
+      return { ...last, done: true, remain: 0, sentStoreIds };
     }
-    await setDropWave(env, newsId, { storeId: id });
+    await setDropWave(env, newsId, { storeId: id, last: after });
     try {
-      await mailDropBatch(env, newsId, [id], claimed.emails, secret);
+      await sendDropBatch(env, newsId, [id], page.emails, secret);
     } catch (err) {
       return { error: String(err && err.message || err), ...last, done: false };
     }
-    const marked = await markDropEmails(env, newsId, id, claimed.emails);
-    if (!marked.ok) return { error: errText(marked.data) || "NOTIFY MARK FAILED", ...last, done: false };
-    last.sent = (last.sent || 0) + claimed.emails.length;
-    last.remain = Math.max(0, claimed.remain - claimed.emails.length);
-    last.cursor = "drain";
+    after = page.emails[page.emails.length - 1];
+    last.sent = (last.sent || 0) + page.emails.length;
+    last.remain = Math.max(0, page.n - last.sent);
+    last.cursor = after;
+    await setDropWave(env, newsId, { storeId: id, last: after });
   }
   return last;
 }
@@ -772,10 +876,6 @@ async function markDropSent(env, newsId, storeIds) {
 }
 
 async function dropCardProxy(request, env, ctx) {
-  const key = (await readSecret(env.DROP_STUDIO_KEY)) || (await readSecret(env.GMAIL_APP_PASSWORD));
-  if (!key) {
-    return json(503, { error: "Set GMAIL_APP_PASSWORD (or DROP_STUDIO_KEY) on Studio so cards can send." });
-  }
   const src = new URL(request.url);
   const href = new URL("https://thewearson.com/api/drop-studio");
   const newsId = String(src.searchParams.get("newsId") || "").trim();
@@ -794,19 +894,35 @@ async function dropCardProxy(request, env, ctx) {
     const offset = Math.max(0, Number(src.searchParams.get("offset") || 0) || 0);
     const limit = Math.min(200, Math.max(20, Number(src.searchParams.get("limit") || 100) || 100));
     const page = await pageDropEmails(env, packNewsId, offset, limit, src.searchParams.get("q") || "");
-    if (page.error) return json(503, { error: page.error, n: 0, emails: [] });
+    if (page.error) {
+      const armed = await countDropArmed(env, packNewsId).catch(() => 0);
+      return json(503, { error: page.error, n: armed, emails: [] });
+    }
+    let n = page.n;
+    let emails = page.emails;
+    if (!n) {
+      n = await countDropArmed(env, packNewsId);
+      if (n > 0) {
+        return json(503, {
+          error: "NOTIFY LIST IS IN THE DATABASE BUT STUDIO CANNOT READ IT. PASTE service_role IN STUDIO VAULT.",
+          n,
+          emails: [],
+        });
+      }
+    }
     return json(200, {
       ok: true,
       newsId: dropPackId(packNewsId, env),
-      n: page.n,
-      emails: page.emails,
+      n,
+      emails,
       offset: page.offset,
       limit,
-      hasMore: page.offset + page.emails.length < page.n,
+      hasMore: page.offset + emails.length < n,
       sentStoreIds: state.sentStoreIds,
       lockDone: state.lockDone,
     });
   }
+  const key = (await readSecret(env.DROP_STUDIO_KEY)) || (await readSecret(env.GMAIL_APP_PASSWORD));
   const storeIds = Array.isArray(bodyObj.storeIds) ? bodyObj.storeIds.map(String) : [];
   const storeId = String(storeIds[0] || "").toLowerCase();
   if (!storeId) return json(400, { error: "storeIds required." });

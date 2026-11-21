@@ -728,26 +728,6 @@ function jobFromNews(row) {
   };
 }
 
-async function armVansTestIfNeeded(env) {
-  const res = await sbFetch(env, `/rest/v1/drip_news?id=eq.${VANS_NEWS_ID}&select=id,drop_json,buy_note`, { method: "GET" });
-  const row = Array.isArray(res.data) ? res.data[0] : null;
-  if (!row) return { skipped: true };
-  const json = parseDropJson(row.drop_json);
-  if (json && (json.on === false || json.at)) return { skipped: true };
-  const at = new Date(Date.now() + 120000).toISOString().replace(/\.\d{3}Z$/, "Z");
-  const drop = { on: true, at, stores: VANS_STORES, defaultId: "goat", test: true };
-  const patched = await sbFetch(env, `/rest/v1/drip_news?id=eq.${VANS_NEWS_ID}`, {
-    method: "PATCH",
-    extra: { Prefer: "return=minimal" },
-    body: {
-      drop_json: drop,
-      buy_url: VANS_GOAT,
-      buy_note: `GOAT.COM\nAT ${at}\nGOAT ${VANS_GOAT}`,
-    },
-  });
-  return { ok: patched.ok, at, newsId: VANS_NEWS_ID };
-}
-
 async function loadDispatchDropJobs(env) {
   const res = await sbFetch(env, "/rest/v1/drip_news?select=id,drop_json,buy_note&order=created_at.desc&limit=80", { method: "GET" });
   const rows = Array.isArray(res.data) ? res.data : [];
@@ -986,7 +966,6 @@ async function dropJobs(env) {
 }
 
 async function tickDropFromDb(env) {
-  const test = await armVansTestIfNeeded(env).catch((err) => ({ error: String(err && err.message || err) }));
   const jobs = await dropJobs(env);
   const out = [];
   for (const job of jobs) {
@@ -1004,7 +983,7 @@ async function tickDropFromDb(env) {
       state = await getDropState(env, job.newsId);
     }
   }
-  return out.length ? { ok: true, waves: out, test } : { skipped: true, test };
+  return out.length ? { ok: true, waves: out } : { skipped: true };
 }
 
 async function markDropSent(env, newsId, storeIds) {

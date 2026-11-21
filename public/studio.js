@@ -35,6 +35,10 @@
     { id: "cactus", label: "Cactus Jack", url: "https://shop.travisscott.com" },
   ];
   const AF1_NOTE = "Nov 21 • 10:00 AM ET • AF1 Black & White + Apparel\nNov 23 • Gradient Camo & Full Lineup";
+  const VANS_NEWS_ID = "7768da16-8167-4ea3-ba32-6dd13f884f47";
+  const VANS_STORES = [
+    { id: "goat", label: "GOAT", url: "https://www.goat.com/product/vans-lx-old-skool-36-pack-yacht-club-multi-color-vn000e8vbgk" },
+  ];
   let dropOn = false;
   let dropDefault = 0;
   let dropSending = false;
@@ -1761,10 +1765,16 @@
     if (!title || title.includes("MIAMI HEAT")) return false;
     return title.includes("GTA 6") && title.includes("TRAVIS SCOTT");
   }
+  function looksVans(row) {
+    return String(row?.id || "").toLowerCase() === VANS_NEWS_ID;
+  }
   function currentDropKit() {
     const title = document.getElementById("news-title")?.value || "";
     if (looksAf1(editingNews) || looksAf1({ title })) {
       return { at: AF1_AT, stores: AF1_STORES, defaultId: "snkrs" };
+    }
+    if (looksVans(editingNews) || looksVans({ id: editingNews?.id })) {
+      return { at: "", stores: VANS_STORES, defaultId: "goat" };
     }
     if (looksViceCity(editingNews) || looksViceCity({ title })) {
       return { at: VICE_AT, stores: VICE_STORES, defaultId: "nba" };
@@ -1912,11 +1922,14 @@
     const packed = parseDropNote(row?.buy_note);
     const vice = looksViceCity(row);
     const af1 = looksAf1(row);
+    const vans = looksVans(row);
     const kit = af1
       ? { at: AF1_AT, stores: AF1_STORES, defaultId: "snkrs" }
+      : vans
+        ? { at: "", stores: VANS_STORES, defaultId: "goat" }
       : (vice ? { at: VICE_AT, stores: VICE_STORES, defaultId: "nba" } : currentDropKit());
     const off = json?.on === false || packed.off;
-    dropOn = !off && (json?.on === true || packed.stores.length >= 2 || vice || af1);
+    dropOn = !off && (json?.on === true || packed.stores.length >= 2 || vice || af1 || vans);
     const listed = (json?.stores?.length ? json.stores : packed.stores).slice(0, 4);
     const stores = (af1 || vice
       ? kit.stores.map((base) => {
@@ -1957,6 +1970,7 @@
     if (fallback === "snkrs" || looksAf1(editingNews) || looksAf1({ title: document.getElementById("news-title")?.value || "" })) {
       if (/snkrs|nike/.test(s) && !/cactus|travis/.test(s)) return "snkrs";
     }
+    if (/goat/.test(s)) return "goat";
     if (/nike|snkrs/.test(s)) return "nike";
     if (/fanatics/.test(s)) return "fanatics";
     if (/nba/.test(s)) return "nba";
@@ -2533,8 +2547,11 @@
       snack("ADD AN HD PHOTO FIRST.", true);
       return;
     }
-    if (dropOn && (!dropPack.drop_json?.stores || dropPack.drop_json.stores.length < 2)) {
-      snack("DROP NEEDS 2 STORE URLS.", true);
+    const viceSave = looksViceCity(editingNews) || looksViceCity({ title });
+    const af1Save = looksAf1(editingNews) || looksAf1({ title });
+    const minStores = viceSave || af1Save ? 2 : 1;
+    if (dropOn && (!dropPack.drop_json?.stores || dropPack.drop_json.stores.length < minStores)) {
+      snack(minStores > 1 ? "DROP NEEDS 2 STORE URLS." : "DROP NEEDS A STORE URL.", true);
       return;
     }
     msg.textContent = "SAVING…";

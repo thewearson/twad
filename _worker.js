@@ -417,6 +417,9 @@ const AF1_STORES = [
   { id: "snkrs", label: "Nike SNKRS", url: "https://www.nike.com/launch" },
   { id: "cactus", label: "Cactus Jack", url: "https://shop.travisscott.com" },
 ];
+const VANS_NEWS_ID = "7768da16-8167-4ea3-ba32-6dd13f884f47";
+const VANS_GOAT = "https://www.goat.com/product/vans-lx-old-skool-36-pack-yacht-club-multi-color-vn000e8vbgk";
+const VANS_STORES = [{ id: "goat", label: "GOAT", url: VANS_GOAT }];
 
 function corsHeaders(request) {
   const origin = String(request.headers.get("Origin") || "");
@@ -566,8 +569,8 @@ async function dropNotifyResponse(request, env) {
   if (!newsId) return corsJson(request, 400, { error: "Drop required." });
   const pack = dropPackId(newsId, env);
   if (!off) {
-    const af1 = pack === String(env.AF1_NEWS_ID || "75460ba6-0d53-402b-ad25-7a5a5a36dc7e").toLowerCase();
-    const at = Date.parse(af1 ? (env.AF1_AT || "2026-11-21T15:00:00Z") : (env.VICE_AT || "2026-11-20T15:00:00Z"));
+    const live = await loadDropCard(env, newsId, []);
+    const at = Date.parse(live.at);
     if (Number.isFinite(at) && Date.now() >= at) {
       return corsJson(request, 410, { error: "Notify closed.", closed: true, newsId: pack });
     }
@@ -657,6 +660,100 @@ async function countDropArmed(env, newsId) {
   return Number(res.data && res.data.n) || 0;
 }
 
+function parseDropJson(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+  return null;
+}
+
+function dropStoreId(label, url, fallback) {
+  const s = `${label} ${url}`.toLowerCase();
+  if (fallback === "snkrs" && /snkrs|nike/.test(s) && !/cactus|travis/.test(s)) return "snkrs";
+  if (/goat/.test(s)) return "goat";
+  if (/nike|snkrs/.test(s)) return "nike";
+  if (/fanatics/.test(s)) return "fanatics";
+  if (/nba/.test(s)) return "nba";
+  if (/cactus|travis/.test(s)) return "cactus";
+  return fallback || String(label || "store").toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 18) || "store";
+}
+
+function listedStores(list) {
+  const out = [];
+  const seen = new Set();
+  for (const s of list || []) {
+    const url = hrefAbs(s?.url || s?.href || "");
+    const label = String(s?.label || s?.name || s?.store || "").trim();
+    if (!url || !label) continue;
+    const id = dropStoreId(label, url, s?.id || `s${out.length + 1}`);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, label, url });
+  }
+  return out;
+}
+
+function formatDropWhen(iso) {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  try {
+    const d = new Date(ms).toLocaleString("en-US", {
+      timeZone: "America/New_York",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    }).toUpperCase();
+    return `${d} ET`;
+  } catch {
+    return "";
+  }
+}
+
+function jobFromNews(row) {
+  const json = parseDropJson(row?.drop_json);
+  const packed = parseDropNote(row?.buy_note);
+  if (json?.on === false || packed.off) return null;
+  const stores = listedStores(json?.stores?.length ? json.stores : packed.stores);
+  const at = String(json?.at || packed.at || "").trim();
+  if (!stores.length || !at) return null;
+  return {
+    newsId: String(row.id || "").toLowerCase(),
+    at,
+    storeIds: stores.map((s) => s.id),
+  };
+}
+
+async function armVansTestIfNeeded(env) {
+  const res = await sbFetch(env, `/rest/v1/drip_news?id=eq.${VANS_NEWS_ID}&select=id,drop_json,buy_note`, { method: "GET" });
+  const row = Array.isArray(res.data) ? res.data[0] : null;
+  if (!row) return { skipped: true };
+  const json = parseDropJson(row.drop_json);
+  if (json && (json.on === false || json.at)) return { skipped: true };
+  const at = new Date(Date.now() + 120000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const drop = { on: true, at, stores: VANS_STORES, defaultId: "goat", test: true };
+  const patched = await sbFetch(env, `/rest/v1/drip_news?id=eq.${VANS_NEWS_ID}`, {
+    method: "PATCH",
+    extra: { Prefer: "return=minimal" },
+    body: {
+      drop_json: drop,
+      buy_url: VANS_GOAT,
+      buy_note: `GOAT.COM\nAT ${at}\nGOAT ${VANS_GOAT}`,
+    },
+  });
+  return { ok: patched.ok, at, newsId: VANS_NEWS_ID };
+}
+
+async function loadDispatchDropJobs(env) {
+  const res = await sbFetch(env, "/rest/v1/drip_news?select=id,drop_json,buy_note&order=created_at.desc&limit=80", { method: "GET" });
+  const rows = Array.isArray(res.data) ? res.data : [];
+  return rows.map(jobFromNews).filter(Boolean);
+}
+
 function parseDropNote(note) {
   const lines = String(note || "").split(/\r?\n/);
   const stores = [];
@@ -709,17 +806,26 @@ function overlayStoreList(base, listed) {
 async function loadDropCard(env, newsId, storeIds) {
   const pack = dropPackId(newsId, env);
   const af1 = pack === String(env.AF1_NEWS_ID || "75460ba6-0d53-402b-ad25-7a5a5a36dc7e").toLowerCase();
-  const base = af1 ? AF1_STORES : VICE_STORES;
+  const vice = pack === String(env.VICE_NEWS_ID || "8cbc034c-8bee-4f9f-a7c9-9b32672e1e65").toLowerCase();
   const want = new Set((storeIds || []).map((id) => String(id || "").toLowerCase()).filter(Boolean));
-  const res = await sbFetch(env, `/rest/v1/drip_news?id=eq.${encodeURIComponent(pack)}&select=id,title,product_name,buy_note,buy_url`, { method: "GET" });
+  const res = await sbFetch(env, `/rest/v1/drip_news?id=eq.${encodeURIComponent(pack)}&select=id,title,product_name,buy_note,buy_url,drop_json`, { method: "GET" });
   const row = Array.isArray(res.data) ? res.data[0] : null;
+  const json = parseDropJson(row?.drop_json);
   const packed = parseDropNote(row?.buy_note);
-  const stores = overlayStoreList(base, packed.stores).filter((s) => (!want.size || want.has(s.id)) && s.url);
+  const listed = json?.stores?.length ? json.stores : packed.stores;
+  let stores;
+  if (af1) stores = overlayStoreList(AF1_STORES, listed);
+  else if (vice) stores = overlayStoreList(VICE_STORES, listed);
+  else stores = listedStores(listed.length ? listed : (pack === VANS_NEWS_ID ? VANS_STORES : []));
+  stores = stores.filter((s) => (!want.size || want.has(s.id)) && s.url);
+  const at = String(json?.at || packed.at || (af1
+    ? (env.AF1_AT || "2026-11-21T15:00:00Z")
+    : vice ? (env.VICE_AT || "2026-11-20T15:00:00Z") : "")).trim();
   const title = String(row?.product_name || row?.title || (af1
     ? "GTA 6 × TRAVIS SCOTT - ONLY 600 PAIRS OF THE MULTICOLOR AF1"
-    : "MIAMI HEAT × CACTUS JACK × NIKE × GTA VI"));
-  const when = af1 ? "21 NOV 2026 · 10:00 AM ET" : "20 NOV 2026 · 10:00 AM ET";
-  return { newsId: pack, title, when, stores };
+    : vice ? "MIAMI HEAT × CACTUS JACK × NIKE × GTA VI" : ""));
+  const when = formatDropWhen(at) || (af1 ? "21 NOV 2026 · 10:00 AM ET" : vice ? "20 NOV 2026 · 10:00 AM ET" : "");
+  return { newsId: pack, title, when, at, stores, on: json?.on !== false && !packed.off };
 }
 
 function dropCardSubject(stores) {
@@ -856,8 +962,8 @@ async function drainDropStore(env, newsId, storeId, { reset = false, batches = 6
   return last;
 }
 
-function dropJobs(env) {
-  return [
+async function dropJobs(env) {
+  const jobs = [
     {
       newsId: env.VICE_NEWS_ID || "8cbc034c-8bee-4f9f-a7c9-9b32672e1e65",
       at: env.VICE_AT || "2026-11-20T15:00:00Z",
@@ -869,10 +975,19 @@ function dropJobs(env) {
       storeIds: ["snkrs", "cactus"],
     },
   ];
+  const seen = new Set(jobs.map((job) => String(job.newsId).toLowerCase()));
+  for (const job of await loadDispatchDropJobs(env)) {
+    const id = String(job.newsId || "").toLowerCase();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    jobs.push(job);
+  }
+  return jobs;
 }
 
 async function tickDropFromDb(env) {
-  const jobs = dropJobs(env);
+  const test = await armVansTestIfNeeded(env).catch((err) => ({ error: String(err && err.message || err) }));
+  const jobs = await dropJobs(env);
   const out = [];
   for (const job of jobs) {
     const at = Date.parse(job.at);
@@ -889,7 +1004,7 @@ async function tickDropFromDb(env) {
       state = await getDropState(env, job.newsId);
     }
   }
-  return out.length ? { ok: true, waves: out } : { skipped: true };
+  return out.length ? { ok: true, waves: out, test } : { skipped: true, test };
 }
 
 async function markDropSent(env, newsId, storeIds) {

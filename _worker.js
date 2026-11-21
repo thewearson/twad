@@ -81,6 +81,12 @@ async function readSecret(value) {
   return "";
 }
 
+async function gmailPass(env) {
+  const a = (await readSecret(env && env.GMAIL_APP_PASSWORD)).replace(/\s+/g, "");
+  if (a) return a;
+  return (await readSecret(env && env.GMAIL_APPPASSWORD)).replace(/\s+/g, "");
+}
+
 function fireKey(env) {
   return String(env && env.DROP_FIRE_KEY || "wears-on-drop-fire-2026").trim();
 }
@@ -99,7 +105,7 @@ async function fireAuthorized(request, env) {
   if (!got) return false;
   const keys = [
     await readSecret(env.DROP_STUDIO_KEY),
-    await readSecret(env.GMAIL_APP_PASSWORD),
+    await gmailPass(env),
     fireKey(env),
   ].filter(Boolean);
   return keys.some((k) => sameSecret(got, k));
@@ -466,7 +472,7 @@ function b64utf8(s) {
 
 async function smtpSend(env, { recipients, subject, text, html }) {
   const user = String(env.GMAIL_USER || "thewears.on@gmail.com").trim();
-  const pass = (await readSecret(env.GMAIL_APP_PASSWORD)).replace(/\s+/g, "");
+  const pass = await gmailPass(env);
   if (!pass) throw new Error("GMAIL_APP_PASSWORD missing");
   const toList = [...new Set((recipients || []).map(cleanEmail).filter(Boolean))];
   if (!toList.length) return { ok: true, sent: 0 };
@@ -884,7 +890,7 @@ async function mailDropBatch(env, newsId, storeIds, emails, key) {
 }
 
 async function sendDropBatch(env, newsId, storeIds, emails, key) {
-  const gmail = (await readSecret(env.GMAIL_APP_PASSWORD)).replace(/\s+/g, "");
+  const gmail = await gmailPass(env);
   if (gmail) {
     try {
       return await mailDropLocal(env, newsId, storeIds, emails);
@@ -900,7 +906,7 @@ async function drainDropStore(env, newsId, storeId, { reset = false, batches = 6
   const id = String(storeId || "").toLowerCase();
   const secret = key
     || (await readSecret(env.DROP_STUDIO_KEY))
-    || (await readSecret(env.GMAIL_APP_PASSWORD))
+    || (await gmailPass(env))
     || fireKey(env);
   const state = await getDropState(env, newsId);
   let after = reset || String(state.wave?.storeId || "") !== id ? "" : String(state.wave?.last || "");
@@ -1050,7 +1056,7 @@ async function dropCardProxy(request, env, ctx) {
       lockDone: state.lockDone,
     });
   }
-  const key = (await readSecret(env.DROP_STUDIO_KEY)) || (await readSecret(env.GMAIL_APP_PASSWORD));
+  const key = (await readSecret(env.DROP_STUDIO_KEY)) || (await gmailPass(env));
   const storeIds = Array.isArray(bodyObj.storeIds) ? bodyObj.storeIds.map(String) : [];
   const storeId = String(storeIds[0] || "").toLowerCase();
   if (!storeId) return json(400, { error: "storeIds required." });
